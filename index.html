@@ -123,11 +123,23 @@ function App() {
   async function fetchFolder(token, folderId, path) {
     try {
       setStage(STAGES.BROWSING);
-      const url = folderId === "root" ? "https://graph.microsoft.com/v1.0/me/drive/root/children" : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children`;
+      // Fetch up to 500 items, ordered folders first
+      const url = folderId === "root"
+        ? "https://graph.microsoft.com/v1.0/me/drive/root/children?$top=500&$orderby=name"
+        : `https://graph.microsoft.com/v1.0/me/drive/items/${folderId}/children?$top=500&$orderby=name`;
       const data = await gFetch(url, token);
+      // Show ALL folders (so user can keep drilling down) + PDF files
       const items = data.value.filter(i => i.folder || i.name?.toLowerCase().endsWith(".pdf"));
-      setGraphFiles(items); setFolderPath(path); 
-    } catch(e) { setAuthError(e.message); }
+      // Sort: folders first, then PDFs
+      items.sort((a, b) => {
+        if (a.folder && !b.folder) return -1;
+        if (!a.folder && b.folder) return 1;
+        return (a.name||"").localeCompare(b.name||"");
+      });
+      setGraphFiles(items);
+      setFolderPath(path);
+      setAuthError("");
+    } catch(e) { setAuthError("Could not open folder: " + e.message); }
   }
 
   async function browseFolder(item) {
@@ -352,12 +364,18 @@ function App() {
                 </div>
                 <div style={{background:"rgba(13,20,35,0.9)",border:"1px solid #162032",borderRadius:12,overflow:"hidden",marginBottom:16}}>
                   <div style={{padding:"12px 16px",borderBottom:"1px solid #162032",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                    <div style={{fontSize:11,color:"#475569",letterSpacing:"0.1em"}}>{graphFiles.length} ITEMS · {Object.values(selectedFiles).filter(Boolean).length} SELECTED</div>
+                    <div style={{fontSize:11,color:"#475569",letterSpacing:"0.1em"}}>
+                      {graphFiles.filter(f=>f.folder).length} FOLDERS · {graphFiles.filter(f=>!f.folder).length} PDFs · {Object.values(selectedFiles).filter(Boolean).length} SELECTED
+                    </div>
                     <button onClick={()=>{const pdfs=graphFiles.filter(f=>!f.folder);const all=pdfs.every(f=>selectedFiles[f.id]);const s={};pdfs.forEach(f=>{s[f.id]=!all;});setSelectedFiles(s);}} style={{background:"transparent",border:"1px solid #1e3a5f",borderRadius:5,color:"#64748b",cursor:"pointer",fontSize:10,padding:"4px 10px",fontFamily:"monospace"}}>
                       {graphFiles.filter(f=>!f.folder).every(f=>selectedFiles[f.id])?"DESELECT ALL":"SELECT ALL PDFs"}
                     </button>
                   </div>
-                  {graphFiles.length===0&&<div style={{padding:"32px",textAlign:"center",color:"#334155",fontSize:13}}>No PDF files in this folder</div>}
+                  {graphFiles.length===0&&<div style={{padding:"32px",textAlign:"center",color:"#334155",fontSize:13}}>
+                    <div style={{fontSize:28,marginBottom:12}}>📂</div>
+                    <div>No folders or PDF files found here</div>
+                    <div style={{fontSize:11,marginTop:6,color:"#1e3a5f"}}>Try navigating back and choosing a different folder</div>
+                  </div>}
                   {graphFiles.map(item=>(
                     <div key={item.id} className="fh" onClick={()=>item.folder?browseFolder(item):setSelectedFiles(s=>({...s,[item.id]:!s[item.id]}))}
                       style={{padding:"11px 16px",borderBottom:"1px solid rgba(22,32,50,0.6)",display:"flex",alignItems:"center",gap:12,transition:"background 0.1s",background:selectedFiles[item.id]?"rgba(59,130,246,0.05)":"transparent"}}>
@@ -365,7 +383,12 @@ function App() {
                       <span style={{fontSize:16}}>{item.folder?"📂":"📄"}</span>
                       <div style={{flex:1}}>
                         <div style={{fontSize:13,color:item.folder?"#94a3b8":"#e2e8f0"}}>{item.name}</div>
-                        {item.lastModifiedDateTime&&<div style={{fontSize:10,color:"#334155"}}>{new Date(item.lastModifiedDateTime).toLocaleDateString()}{item.size?` · ${Math.round(item.size/1024)}KB`:""}</div>}
+                        <div style={{fontSize:10,color:"#334155"}}>
+                          {item.folder
+                            ? `📁 ${item.folder.childCount ?? ""} items${item.lastModifiedDateTime ? " · " + new Date(item.lastModifiedDateTime).toLocaleDateString() : ""}`
+                            : `${item.lastModifiedDateTime ? new Date(item.lastModifiedDateTime).toLocaleDateString() : ""}${item.size ? " · " + Math.round(item.size/1024) + "KB" : ""}`
+                          }
+                        </div>
                       </div>
                       {item.folder&&<span style={{color:"#334155",fontSize:12}}>›</span>}
                     </div>
