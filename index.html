@@ -301,7 +301,7 @@ function App() {
   async function analyzeText(text, fileName) {
     const headers = { "Content-Type":"application/json" };
     if (apiKey) headers["x-api-key"] = apiKey;
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("https://thai-ledger-proxy-fwce.vercel.app/api/anthropic", {
       method:"POST", headers,
       body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:SYSTEM_PROMPT,
         messages:[{ role:"user", content:`Extract accounting data (file: ${fileName}):\n\n${text.slice(0,12000)}` }] })
@@ -313,7 +313,7 @@ function App() {
   async function analyzeImages(imageContents) {
     const headers = { "Content-Type":"application/json" };
     if (apiKey) headers["x-api-key"] = apiKey;
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetch("https://thai-ledger-proxy-fwce.vercel.app/api/anthropic", {
       method:"POST", headers,
       body: JSON.stringify({ model:"claude-sonnet-4-20250514", max_tokens:1000, system:SYSTEM_PROMPT,
         messages:[{ role:"user", content: imageContents }] })
