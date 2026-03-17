@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Thai Ledger — Privacy Policy</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; color: #333; line-height: 1.6; }
+  h1 { color: #1a1a2e; border-bottom: 2px solid #3b82f6; padding-bottom: 10px; }
+  h2 { color: #3b82f6; margin-top: 30px; }
+  .date { color: #666; font-size: 14px; }
+  table { width: 100%; border-collapse: collapse; margin: 20px 0; }
+  th { background: #3b82f6; color: white; padding: 10px; text-align: left; }
+  td { padding: 10px; border-bottom: 1px solid #ddd; }
+</style>
+</head>
+<body>
+<h1>Thai Ledger — Privacy Policy</h1>
+<p class="date">Last updated: March 17, 2026</p>
+
+<h2>1. Overview</h2>
+<p>Thai Ledger ("the Application") is a private internal accounting tool. This Privacy Policy explains how the Application handles data when used by authorized personnel to process accounting documents and post transactions to QuickBooks Online.</p>
+
+<h2>2. Who We Are</h2>
+<p>Thai Ledger is a private internal application used exclusively by authorized accounting staff. It is not a public application and is not available to the general public.</p>
+
+<h2>3. Data We Process</h2>
+<table>
+  <tr><th>Data Type</th><th>Purpose</th><th>Storage</th></tr>
+  <tr><td>PDF financial documents (invoices, receipts)</td><td>AI extraction of accounting data</td><td>Processed in memory only, not stored permanently</td></tr>
+  <tr><td>QuickBooks Online OAuth tokens</td><td>API authentication to post transactions</td><td>Browser localStorage on user's device only</td></tr>
+  <tr><td>Microsoft 365 OAuth tokens</td><td>Access to Teams/SharePoint document folders</td><td>Browser sessionStorage on user's device only</td></tr>
+  <tr><td>Client configuration settings</td><td>Store client preferences and GL rules</td><td>Browser localStorage on user's device only</td></tr>
+  <tr><td>Accounting transaction data</td><td>Create Bills, Expenses in QuickBooks Online</td><td>Posted directly to QBO, not retained by the Application</td></tr>
+</table>
+
+<h2>4. Third Party Services</h2>
+<p>The Application uses the following third party services:</p>
+<ul>
+  <li><strong>Anthropic Claude API</strong> — Document text is sent to Anthropic's API for AI processing and data extraction. Anthropic's privacy policy applies: <a href="https://www.anthropic.com/privacy">anthropic.com/privacy</a></li>
+  <li><strong>Intuit QuickBooks Online API</strong> — Transaction data is posted to QuickBooks Online via Intuit's API. Intuit's privacy policy applies: <a href="https://www.intuit.com/privacy">intuit.com/privacy</a></li>
+  <li><strong>Microsoft Graph API</strong> — Document folders in Teams/SharePoint are accessed via Microsoft's API. Microsoft's privacy policy applies: <a href="https://privacy.microsoft.com">privacy.microsoft.com</a></li>
+</ul>
+
+<h2>5. Data We Do Not Collect</h2>
+<p>The Application does not: (a) store financial documents on any server; (b) retain accounting data beyond what is posted to QuickBooks Online; (c) share data with any party other than the services listed above; (d) use data for advertising or marketing purposes; (e) sell or transfer data to third parties.</p>
+
+<h2>6. Data Security</h2>
+<p>All API communications use HTTPS encryption. OAuth tokens are stored only in the user's local browser and are never transmitted to our servers. The Vercel proxy server handles API routing only and does not log or store financial data.</p>
+
+<h2>7. Data Retention</h2>
+<p>The Application does not retain data. All processing occurs in the user's browser session. OAuth tokens stored in localStorage remain until the user clears their browser data or explicitly disconnects.</p>
+
+<h2>8. User Rights</h2>
+<p>Users can delete all locally stored data at any time by clearing their browser's localStorage or using the Application's built-in disconnect features.</p>
+
+<h2>9. Changes to This Policy</h2>
+<p>This policy may be updated periodically. Continued use of the Application constitutes acceptance of any changes.</p>
+
+<h2>10. Contact</h2>
+<p>For privacy-related questions, please contact the application administrator.</p>
+</body>
+</html>
