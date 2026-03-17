@@ -141,8 +141,8 @@ function App() {
             fetchLocations(token);
           }).catch(e => setAuthError(e.message));
         } else if (saved.type === "qbo") {
-          exchangeQboCode(code, saved.clientId, saved.clientSecret).then(({accessToken, realmId}) => {
-            // Save QBO token to client
+          const realmId = params.get("realmId");
+          exchangeQboCode(code, saved.clientId, saved.clientSecret).then(({accessToken}) => {
             setClients(prev => {
               const updated = prev.map(c => c.id === saved.clientId_extract
                 ? {...c, qboToken: accessToken, qboRealmId: realmId, qboConnected: true}
@@ -152,14 +152,14 @@ function App() {
               return updated;
             });
             setView(VIEWS.CLIENTS);
-            alert("✅ QuickBooks Online connected successfully!");
+            alert("✅ QuickBooks Online connected! Company ID: " + realmId);
           }).catch(e => alert("QBO connection failed: " + e.message));
         }
       }
     }
   }, []);
 
-  const saveSettings = (s) => { setSettings(s); localStorage.setItem("extract_settings", JSON.stringify(s)); };
+  const saveSettings = (s) => { setSettings(s); localStorage.setItem("extract_settings", JSON.stringify(s)); alert("✅ Settings saved successfully!"); };
   const saveClients = (c) => { setClients(c); localStorage.setItem("extract_clients", JSON.stringify(c)); };
 
   // ── QBO OAuth ──
@@ -178,7 +178,7 @@ function App() {
     });
     const d = await res.json();
     if (d.error) throw new Error(d.error);
-    return { accessToken: d.access_token, realmId: d.realmId };
+    return { accessToken: d.access_token };
   }
 
   // ── QBO API calls ──
