@@ -420,7 +420,9 @@ function App() {
     }
     const hasText=text.trim().replace(/\s+/g,"").length>80;
     const client = clients.find(c=>c.id===activeClient);
-    const coa = client?.chartOfAccounts || [];
+    // Limit COA to expense/liability accounts only to avoid stack overflow with large lists
+    const allCoa = client?.chartOfAccounts || [];
+    const coa = allCoa.filter(a=>["Expense","Cost of Goods Sold","Other Expense","Accounts Payable","Other Current Liability"].includes(a.type)).slice(0,40);
     const businessType = client?.businessType || "General";
     const wfRules = buildWorkflowRules(client);
     const prompt = SYSTEM_PROMPT(coa, businessType, wfRules);
