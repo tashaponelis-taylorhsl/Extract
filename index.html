@@ -490,9 +490,20 @@ function App() {
 
   // ── Microsoft Graph ──
   async function exchangeMsCode(code, verifier) {
-    const s = JSON.parse(sessionStorage.getItem("oauth_state")||"{}");
-    const body = new URLSearchParams({ client_id: settings.msClientId, grant_type:"authorization_code", code, redirect_uri: APP_URL, code_verifier: verifier, scope: GRAPH_SCOPES.join(" ") });
-    const res = await fetch(`https://login.microsoftonline.com/${settings.msTenantId}/oauth2/v2.0/token`, { method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body });
+    // Use credentials saved in sessionStorage before redirect (settings state may be empty after redirect)
+    const saved = JSON.parse(sessionStorage.getItem("oauth_state")||"{}");
+    const msClientId = saved.msClientId || settings.msClientId;
+    const msTenantId = saved.msTenantId || settings.msTenantId;
+    // Route through Vercel proxy to avoid CORS
+    const res = await fetch(`${PROXY}/api/ms-token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ 
+        clientId: msClientId, tenantId: msTenantId,
+        code, verifier, redirectUri: APP_URL,
+        scopes: GRAPH_SCOPES.join(" ")
+      })
+    });
     const d = await res.json();
     if (d.error) throw new Error(d.error_description||d.error);
     return d.access_token;
@@ -502,7 +513,12 @@ function App() {
     if (!settings.msClientId||!settings.msTenantId) { setAuthError("Please enter Microsoft Client ID and Tenant ID in Settings."); return; }
     const { verifier, challenge } = await genPKCE();
     const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
-    sessionStorage.setItem("oauth_state", JSON.stringify({ state, type:"ms", verifier }));
+    // Save credentials in sessionStorage so they survive the redirect
+    sessionStorage.setItem("oauth_state", JSON.stringify({ 
+      state, type:"ms", verifier, 
+      msClientId: settings.msClientId, 
+      msTenantId: settings.msTenantId 
+    }));
     const authUrl = `https://login.microsoftonline.com/${settings.msTenantId}/oauth2/v2.0/authorize?`+new URLSearchParams({ client_id: settings.msClientId, response_type:"code", redirect_uri: APP_URL, scope: GRAPH_SCOPES.join(" "), state, code_challenge: challenge, code_challenge_method:"S256", prompt:"select_account" });
     window.location.href = authUrl;
   }
