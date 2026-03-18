@@ -129,6 +129,8 @@ function App() {
       if (s) setSettings(JSON.parse(s));
       const c = localStorage.getItem("extract_clients");
       if (c) setClients(JSON.parse(c));
+      const ac = localStorage.getItem("extract_active_client");
+      if (ac) setActiveClient(ac);
     } catch{}
 
     // Handle OAuth callbacks
@@ -145,6 +147,9 @@ function App() {
             setSourceTab("teams");
             setStage(STAGES.BROWSING);
             setView(VIEWS.PROCESS);
+            // Restore active client after redirect
+            const ac = localStorage.getItem("extract_active_client");
+            if (ac) setActiveClient(ac);
             fetchLocations(token);
           }).catch(e => setAuthError(e.message));
         } else if (saved.type === "qbo") {
@@ -806,7 +811,14 @@ function App() {
         {/* Client Selector */}
         <div style={{marginLeft:24,display:"flex",alignItems:"center",gap:10}}>
           <div style={{fontSize:10,color:"#475569",letterSpacing:"0.08em"}}>CLIENT:</div>
-          <select value={activeClient||""} onChange={e=>{setActiveClient(e.target.value||null);setResults([]);setStage(STAGES.IDLE);}}
+          <select value={activeClient||""} onChange={e=>{
+            const val = e.target.value||null;
+            setActiveClient(val);
+            setResults([]);
+            setStage(STAGES.IDLE);
+            if(val) localStorage.setItem("extract_active_client", val);
+            else localStorage.removeItem("extract_active_client");
+          }}
             style={{...inputStyle,width:180,padding:"6px 10px",fontSize:11}}>
             <option value="">— Select Client —</option>
             {clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
