@@ -377,24 +377,14 @@ function App() {
       } else if (bestMatch && bestMatch.score >= 70) {
         // Medium confidence — ask user
         const top3 = scored.slice(0,3).filter(s=>s.score>0);
-        const options = top3.map((s,i) => `${i+1}. "${s.vendor.DisplayName}" (${s.score}% match)`).join("
-");
+        const options = top3.map((s,i) => `${i+1}. "${s.vendor.DisplayName}" (${s.score}% match)`).join("\n");
         const choice = window.confirm(
-          `Vendor "${extractedVendor}" not found exactly in QBO.
-
-Closest matches:
-${options}
-
-Click OK to use "${bestMatch.vendor.DisplayName}" (${bestMatch.score}% match)
-Click Cancel to create a new vendor instead.`
+          `Vendor "${extractedVendor}" not found exactly in QBO.\n\nClosest matches:\n${options}\n\nClick OK to use "${bestMatch.vendor.DisplayName}" (${bestMatch.score}% match)\nClick Cancel to create a new vendor instead.`
         );
         if (choice) {
           vendorRef = { value: bestMatch.vendor.Id, name: bestMatch.vendor.DisplayName };
         } else {
-          const createNew = window.confirm(`Create new vendor "${extractedVendor}" in QBO?
-
-Click OK to create.
-Click Cancel to abort posting.`);
+          const createNew = window.confirm(`Create new vendor "${extractedVendor}" in QBO?\n\nClick OK to create.\nClick Cancel to abort posting.`);
           if (!createNew) {
             setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — vendor not matched"}}));
             return;
@@ -406,12 +396,7 @@ Click Cancel to abort posting.`);
       } else {
         // No match — ask to create
         const createNew = window.confirm(
-          `Vendor "${extractedVendor}" was not found in QBO and no close matches exist.
-
-Create "${extractedVendor}" as a new vendor?
-
-Click OK to create.
-Click Cancel to abort posting.`
+          `Vendor "${extractedVendor}" was not found in QBO and no close matches exist.\n\nCreate "${extractedVendor}" as a new vendor?\n\nClick OK to create.\nClick Cancel to abort posting.`
         );
         if (!createNew) {
           setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — vendor not found in QBO"}}));
