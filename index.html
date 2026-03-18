@@ -227,31 +227,213 @@ function App() {
     } catch(e) { return []; }
   }
 
+  // Fuzzy vendor name matching
+  function vendorSimilarity(a, b) {
+    const clean = s => s.toLowerCase().replace(/co\.?,?\s*ltd\.?|limited|company|public|co\.|inc\.?|corp\.?|\s+/g," ").replace(/[^a-z0-9 ]/g,"").trim();
+    const ca = clean(a), cb = clean(b);
+    if (ca === cb) return 100;
+    if (ca.includes(cb) || cb.includes(ca)) return 90;
+    // Count matching words
+    const wa = new Set(ca.split(" ")), wb = new Set(cb.split(" "));
+    let matches = 0;
+    wa.forEach(w => { if(w.length > 2 && wb.has(w)) matches++; });
+    const score = Math.round((matches / Math.max(wa.size, wb.size)) * 100);
+    return score;
+  }
+
+  // ── GL Learning Engine ──────────────────────────────────────────────
+  function getGLMemory(clientId) {
+    try { return JSON.parse(localStorage.getItem(`gl_memory_${clientId}`) || "{}"); } catch { return {}; }
+  }
+
+  function saveGLMemory(clientId, memory) {
+    localStorage.setItem(`gl_memory_${clientId}`, JSON.stringify(memory));
+  }
+
+  function learnGLRule(clientId, vendor, txType, keywords, accountName) {
+    const memory = getGLMemory(clientId);
+    // Learn vendor rule
+    const vendorKey = vendor.toLowerCase().trim();
+    memory.vendors = memory.vendors || {};
+    memory.vendors[vendorKey] = memory.vendors[vendorKey] || {};
+    memory.vendors[vendorKey][txType] = { account: accountName, count: (memory.vendors[vendorKey][txType]?.count || 0) + 1 };
+    // Learn keyword rules
+    memory.keywords = memory.keywords || {};
+    const words = keywords.toLowerCase().split(/\s+/).filter(w => w.length > 4);
+    words.forEach(word => {
+      memory.keywords[word] = memory.keywords[word] || {};
+      memory.keywords[word][accountName] = (memory.keywords[word][accountName] || 0) + 1;
+    });
+    saveGLMemory(clientId, memory);
+  }
+
+  function suggestGLAccount(clientId, vendor, txType, description, aiSuggestion, availableAccounts) {
+    const memory = getGLMemory(clientId);
+    const vendorKey = (vendor||"").toLowerCase().trim();
+
+    // 1. Check vendor + txType exact memory (highest confidence)
+    if (memory.vendors?.[vendorKey]?.[txType]?.count >= 1) {
+      const learnedAccount = memory.vendors[vendorKey][txType].account;
+      const exists = availableAccounts.find(a => a.name === learnedAccount);
+      if (exists) return { account: learnedAccount, source: "learned", confidence: 100 };
+    }
+
+    // 2. Check keyword memory
+    const words = (description||"").toLowerCase().split(/\s+/).filter(w => w.length > 4);
+    const keywordScores = {};
+    words.forEach(word => {
+      if (memory.keywords?.[word]) {
+        Object.entries(memory.keywords[word]).forEach(([acc, count]) => {
+          keywordScores[acc] = (keywordScores[acc] || 0) + count;
+        });
+      }
+    });
+    if (Object.keys(keywordScores).length > 0) {
+      const bestKeyword = Object.entries(keywordScores).sort((a,b) => b[1]-a[1])[0];
+      const exists = availableAccounts.find(a => a.name === bestKeyword[0]);
+      if (exists && bestKeyword[1] >= 2) return { account: bestKeyword[0], source: "keyword", confidence: 90 };
+    }
+
+    // 3. Use AI suggestion if it exists in chart of accounts
+    if (aiSuggestion) {
+      const exactMatch = availableAccounts.find(a => a.name === aiSuggestion);
+      if (exactMatch) return { account: aiSuggestion, source: "ai", confidence: 75 };
+      // Fuzzy match AI suggestion to available accounts
+      const fuzzy = availableAccounts.map(a => ({
+        name: a.name,
+        score: vendorSimilarity(aiSuggestion, a.name)
+      })).sort((a,b) => b.score-a.score)[0];
+      if (fuzzy && fuzzy.score >= 70) return { account: fuzzy.name, source: "ai_fuzzy", confidence: fuzzy.score };
+    }
+
+    // 4. No suggestion — must select manually
+    return { account: null, source: "none", confidence: 0 };
+  }
+
   async function postToQBO(client, result, ri) {
     setPostStatus(s=>({...s,[ri]:{status:"posting"}}));
     try {
       const ex = result.extracted;
       const accounts = client.chartOfAccounts || [];
 
-      // Find account IDs
-      const findAccount = (name) => {
-        const acc = accounts.find(a => a.name === name);
-        return acc ? { value: acc.id, name: acc.name } : { value: "1", name: name };
+      // GL account resolution with learning
+      const expenseAccounts = accounts.filter(a => 
+        ["Expense","Cost of Goods Sold","Other Expense","Accounts Payable","Other Current Liability"].includes(a.type)
+      );
+
+      const resolveGLAccount = async (aiSuggestedName, description) => {
+        const suggestion = suggestGLAccount(
+          client.id, ex.vendor, ex.transactionType, description, aiSuggestedName, expenseAccounts
+        );
+
+        if (suggestion.confidence >= 90) {
+          // High confidence — use automatically
+          const acc = accounts.find(a => a.name === suggestion.account);
+          return acc ? { value: acc.id, name: acc.name } : null;
+        } else if (suggestion.confidence >= 70) {
+          // AI suggestion — confirm with user
+          const confirmed = window.confirm(
+            `GL Account Suggestion:\n\n` +
+            `"${suggestion.account}"\n` +
+            `(${suggestion.source === "ai" ? "AI suggested" : "Partial match"} — ${suggestion.confidence}% confidence)\n\n` +
+            `Click OK to use this account.\nClick Cancel to select a different account.`
+          );
+          if (confirmed) {
+            const acc = accounts.find(a => a.name === suggestion.account);
+            return acc ? { value: acc.id, name: acc.name } : null;
+          }
+        }
+
+        // No confidence or user declined — show account picker
+        const accountList = expenseAccounts.map((a,i) => `${i+1}. ${a.name} (${a.type})`).join("\n");
+        const selected = window.prompt(
+          `Please select a GL account for:\n"${description}"\n\nAvailable accounts:\n${accountList.slice(0,2000)}\n\nEnter the account NUMBER from the list above:`,
+          "1"
+        );
+        if (!selected) return null;
+        const idx = parseInt(selected) - 1;
+        const picked = expenseAccounts[idx];
+        return picked ? { value: picked.id, name: picked.name } : null;
       };
 
-      // Find or note vendor
-      const vendorQuery = await qboGet(client, `/query?query=select * from Vendor where DisplayName = '${(ex.vendor||"").replace(/'/g,"\\'")}' MAXRESULTS 1`);
-      const vendorList = vendorQuery.QueryResponse?.Vendor || [];
-      let vendorRef = vendorList.length > 0 ? { value: vendorList[0].Id, name: vendorList[0].DisplayName } : null;
+      // Fetch all vendors for fuzzy matching
+      const vendorQuery = await qboGet(client, `/query?query=select * from Vendor MAXRESULTS 200`);
+      const allVendors = vendorQuery.QueryResponse?.Vendor || [];
+      const extractedVendor = ex.vendor || "";
 
-      // If vendor doesn't exist, create it
-      if (!vendorRef) {
-        const newVendor = await qboPost(client, "/vendor", { DisplayName: ex.vendor || "Unknown Vendor" });
+      // Score all vendors
+      const scored = allVendors.map(v => ({
+        vendor: v,
+        score: vendorSimilarity(extractedVendor, v.DisplayName)
+      })).sort((a,b) => b.score - a.score);
+
+      const bestMatch = scored[0];
+      let vendorRef = null;
+
+      if (bestMatch && bestMatch.score >= 95) {
+        // High confidence — use automatically
+        vendorRef = { value: bestMatch.vendor.Id, name: bestMatch.vendor.DisplayName };
+        setPostStatus(s=>({...s,[ri]:{status:"posting", message:`Matched vendor: ${bestMatch.vendor.DisplayName} (${bestMatch.score}%)`}}));
+      } else if (bestMatch && bestMatch.score >= 70) {
+        // Medium confidence — ask user
+        const top3 = scored.slice(0,3).filter(s=>s.score>0);
+        const options = top3.map((s,i) => `${i+1}. "${s.vendor.DisplayName}" (${s.score}% match)`).join("
+");
+        const choice = window.confirm(
+          `Vendor "${extractedVendor}" not found exactly in QBO.
+
+Closest matches:
+${options}
+
+Click OK to use "${bestMatch.vendor.DisplayName}" (${bestMatch.score}% match)
+Click Cancel to create a new vendor instead.`
+        );
+        if (choice) {
+          vendorRef = { value: bestMatch.vendor.Id, name: bestMatch.vendor.DisplayName };
+        } else {
+          const createNew = window.confirm(`Create new vendor "${extractedVendor}" in QBO?
+
+Click OK to create.
+Click Cancel to abort posting.`);
+          if (!createNew) {
+            setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — vendor not matched"}}));
+            return;
+          }
+          const newVendor = await qboPost(client, "/vendor", { DisplayName: extractedVendor });
+          if (newVendor.Vendor) vendorRef = { value: newVendor.Vendor.Id, name: newVendor.Vendor.DisplayName };
+          else throw new Error("Failed to create vendor");
+        }
+      } else {
+        // No match — ask to create
+        const createNew = window.confirm(
+          `Vendor "${extractedVendor}" was not found in QBO and no close matches exist.
+
+Create "${extractedVendor}" as a new vendor?
+
+Click OK to create.
+Click Cancel to abort posting.`
+        );
+        if (!createNew) {
+          setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — vendor not found in QBO"}}));
+          return;
+        }
+        const newVendor = await qboPost(client, "/vendor", { DisplayName: extractedVendor });
         if (newVendor.Vendor) vendorRef = { value: newVendor.Vendor.Id, name: newVendor.Vendor.DisplayName };
-        else vendorRef = { value: "1", name: ex.vendor || "Unknown Vendor" };
+        else throw new Error("Failed to create vendor");
       }
 
-      const lines = (ex.lines||[{description: ex.transactions?.[0]?.description||"Service", amount: ex.totalAmount||0, accountName: ex.transactions?.[0]?.category||""}]);
+      const rawLines = (ex.lines||[{description: ex.transactions?.[0]?.description||"Service", amount: ex.totalAmount||0, accountName: ex.transactions?.[0]?.category||""}]);
+
+      // Resolve GL accounts with learning
+      const resolvedLines = [];
+      for (const l of rawLines) {
+        const accountRef = await resolveGLAccount(l.accountName, l.description);
+        if (!accountRef) {
+          setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — GL account not selected"}}));
+          return;
+        }
+        resolvedLines.push({ ...l, accountRef });
+      }
 
       let txId, txType;
 
@@ -262,10 +444,10 @@ function App() {
           DueDate: ex.dueDate || ex.documentDate,
           DocNumber: ex.documentNumber,
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}`,
-          Line: lines.map(l => ({
+          Line: resolvedLines.map(l => ({
             Amount: Math.abs(l.amount),
             DetailType: "AccountBasedExpenseLineDetail",
-            AccountBasedExpenseLineDetail: { AccountRef: findAccount(l.accountName) },
+            AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
             Description: l.description
           }))
         };
@@ -283,10 +465,10 @@ function App() {
           TxnDate: ex.documentDate,
           DocNumber: ex.documentNumber,
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}`,
-          Line: lines.map(l => ({
+          Line: resolvedLines.map(l => ({
             Amount: Math.abs(l.amount),
             DetailType: "AccountBasedExpenseLineDetail",
-            AccountBasedExpenseLineDetail: { AccountRef: findAccount(l.accountName) },
+            AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
             Description: l.description
           }))
         };
@@ -295,6 +477,11 @@ function App() {
         txId = res.Purchase?.Id;
         txType = "Expense";
       }
+
+      // ── Learn from this posting ──
+      resolvedLines.forEach(l => {
+        learnGLRule(client.id, ex.vendor, ex.transactionType, l.description, l.accountRef.name);
+      });
 
       // Attach PDF if we have the file data
       if (result.fileData && txId) {
