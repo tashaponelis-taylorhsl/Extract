@@ -492,21 +492,25 @@ function App() {
 
   // ── Microsoft Graph ──
   async function exchangeMsCode(code, verifier, msClientId, msTenantId) {
-    // Credentials passed directly from sessionStorage saved before redirect
+    // SPA tokens MUST be exchanged directly from browser (Microsoft requirement)
+    // PKCE flow allows this without CORS issues
     const clientId = msClientId || settings.msClientId;
     const tenantId = msTenantId || settings.msTenantId;
     if (!clientId || !tenantId) throw new Error("Microsoft Client ID or Tenant ID missing. Please check Settings.");
-    // Debug - log what we are sending
-    const payload = { clientId, tenantId, code, verifier, redirectUri: APP_URL, scopes: GRAPH_SCOPES.join(" ") };
-    console.log("MS token payload:", { clientId: !!clientId, tenantId: !!tenantId, code: !!code, verifier: !!verifier });
-    // Route through Vercel proxy to avoid CORS
-    const res = await fetch(`${PROXY}/api/ms-token`, {
+    const body = new URLSearchParams({
+      client_id: clientId,
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: APP_URL,
+      code_verifier: verifier,
+      scope: GRAPH_SCOPES.join(" "),
+    });
+    const res = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
     });
     const d = await res.json();
-    console.log("MS token response:", d);
     if (d.error) throw new Error(d.error_description||d.error);
     return d.access_token;
   }
