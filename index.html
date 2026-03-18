@@ -139,10 +139,12 @@ function App() {
       if (saved.state === state) {
         window.history.replaceState({}, "", window.location.pathname);
         if (saved.type === "ms") {
-          exchangeMsCode(code, saved.verifier).then(token => {
+          // Pass saved credentials directly - don't rely on React settings state
+          exchangeMsCode(code, saved.verifier, saved.msClientId, saved.msTenantId).then(token => {
             setGraphToken(token);
             setSourceTab("teams");
             setStage(STAGES.BROWSING);
+            setView(VIEWS.PROCESS);
             fetchLocations(token);
           }).catch(e => setAuthError(e.message));
         } else if (saved.type === "qbo") {
@@ -489,22 +491,22 @@ function App() {
   }
 
   // ── Microsoft Graph ──
-  async function exchangeMsCode(code, verifier) {
-    // Use credentials saved in sessionStorage before redirect (settings state may be empty after redirect)
-    const saved = JSON.parse(sessionStorage.getItem("oauth_state")||"{}");
-    const msClientId = saved.msClientId || settings.msClientId;
-    const msTenantId = saved.msTenantId || settings.msTenantId;
+  async function exchangeMsCode(code, verifier, msClientId, msTenantId) {
+    // Credentials passed directly from sessionStorage saved before redirect
+    const clientId = msClientId || settings.msClientId;
+    const tenantId = msTenantId || settings.msTenantId;
+    if (!clientId || !tenantId) throw new Error("Microsoft Client ID or Tenant ID missing. Please check Settings.");
+    // Debug - log what we are sending
+    const payload = { clientId, tenantId, code, verifier, redirectUri: APP_URL, scopes: GRAPH_SCOPES.join(" ") };
+    console.log("MS token payload:", { clientId: !!clientId, tenantId: !!tenantId, code: !!code, verifier: !!verifier });
     // Route through Vercel proxy to avoid CORS
     const res = await fetch(`${PROXY}/api/ms-token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ 
-        clientId: msClientId, tenantId: msTenantId,
-        code, verifier, redirectUri: APP_URL,
-        scopes: GRAPH_SCOPES.join(" ")
-      })
+      body: JSON.stringify(payload)
     });
     const d = await res.json();
+    console.log("MS token response:", d);
     if (d.error) throw new Error(d.error_description||d.error);
     return d.access_token;
   }
