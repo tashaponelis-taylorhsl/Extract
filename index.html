@@ -35,7 +35,7 @@ const GRAPH_SCOPES = ["Files.Read.All","Sites.Read.All","offline_access","openid
 const QBO_SCOPES = "com.intuit.quickbooks.accounting openid profile email phone address";
 const QBO_SANDBOX_BASE = "https://sandbox-quickbooks.api.intuit.com/v3/company";
 
-const VIEWS = { HOME:"home", CLIENTS:"clients", EDIT_CLIENT:"edit_client", PROCESS:"process", SETTINGS:"settings" };
+const VIEWS = { HOME:"home", CLIENTS:"clients", EDIT_CLIENT:"edit_client", PROCESS:"process", SETTINGS:"settings", SUPPORT:"support" };
 const STAGES = { IDLE:"idle", EXTRACTING:"extracting", ANALYZING:"analyzing", DONE:"done", POSTING:"posting", BROWSING:"browsing", CONNECTING:"connecting" };
 
 const BUSINESS_TYPES = ["Construction","Trading","Hospitality","Professional Services","Manufacturing","Retail","Non-Profit","Real Estate","Other"];
@@ -119,6 +119,8 @@ function App() {
   const [authError, setAuthError] = useState("");
   const [sourceTab, setSourceTab] = useState("upload");
   const [duplicateCheck, setDuplicateCheck] = useState(null); // {result, matches, ri}
+  const [periodModal, setPeriodModal] = useState(null); // {result, ri, suggestedDates}
+  const [showPeriods, setShowPeriods] = useState(false);
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
   const fileInputRef = useRef();
 
@@ -172,6 +174,40 @@ function App() {
   }, []);
 
   const saveSettings = (s) => { setSettings(s); localStorage.setItem("extract_settings", JSON.stringify(s)); alert("✅ Settings saved successfully!"); };
+
+  // ── Error Logging ─────────────────────────────────────────────────────
+  function logError(context, error, extraData = {}) {
+    try {
+      const logs = JSON.parse(localStorage.getItem("extract_error_logs") || "[]");
+      logs.unshift({
+        timestamp: new Date().toISOString(),
+        context,
+        error: error?.message || String(error),
+        intuitTid: extraData.intuitTid || null,
+        realmId: extraData.realmId || null,
+        clientName: extraData.clientName || null,
+        fileName: extraData.fileName || null,
+      });
+      // Keep last 100 logs only
+      localStorage.setItem("extract_error_logs", JSON.stringify(logs.slice(0, 100)));
+    } catch(e) { console.error("Log error failed:", e); }
+  }
+
+  function getErrorLogs() {
+    try { return JSON.parse(localStorage.getItem("extract_error_logs") || "[]"); } catch { return []; }
+  }
+
+  function exportErrorLogs() {
+    const logs = getErrorLogs();
+    const text = logs.map(l => 
+      `[${l.timestamp}] ${l.context}\nError: ${l.error}${l.intuitTid ? "\nintuit_tid: "+l.intuitTid : ""}${l.realmId ? "\nrealmId: "+l.realmId : ""}${l.clientName ? "\nClient: "+l.clientName : ""}${l.fileName ? "\nFile: "+l.fileName : ""}\n`
+    ).join("\n---\n");
+    const blob = new Blob([text], {type:"text/plain"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `extract-error-logs-${new Date().toISOString().slice(0,10)}.txt`;
+    a.click();
+  }
   const saveClients = (c) => { setClients(c); localStorage.setItem("extract_clients", JSON.stringify(c)); };
 
   // ── QBO OAuth ──
@@ -248,7 +284,77 @@ function App() {
     return score;
   }
 
-  // ── GL Learning Engine ──────────────────────────────────────────────
+  // ── Period Management ───────────────────────────────────────────────
+  function getClosedPeriods(clientId) {
+    try { return JSON.parse(localStorage.getItem(`closed_periods_${clientId}`) || "{}"); } catch { return {}; }
+  }
+
+  function savePeriodClose(clientId, periodKey, closedDate) {
+    const periods = getClosedPeriods(clientId);
+    periods[periodKey] = { closedOn: closedDate, closedAt: new Date().toISOString() };
+    localStorage.setItem(`closed_periods_${clientId}`, JSON.stringify(periods));
+  }
+
+  function reopenPeriod(clientId, periodKey) {
+    const periods = getClosedPeriods(clientId);
+    delete periods[periodKey];
+    localStorage.setItem(`closed_periods_${clientId}`, JSON.stringify(periods));
+  }
+
+  function getPeriodKey(dateStr) {
+    // dateStr = MM/DD/YYYY → returns "YYYY-MM"
+    const parts = dateStr?.split("/");
+    if (!parts || parts.length < 3) return null;
+    return `${parts[2]}-${parts[0].padStart(2,"0")}`;
+  }
+
+  function getPeriodLabel(periodKey) {
+    // "2026-01" → "January 2026"
+    const [year, month] = periodKey.split("-");
+    const months = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    return `${months[parseInt(month)-1]} ${year}`;
+  }
+
+  function isPeriodClosed(clientId, dateStr) {
+    const periodKey = getPeriodKey(dateStr);
+    if (!periodKey) return false;
+    const periods = getClosedPeriods(clientId);
+    return !!periods[periodKey];
+  }
+
+  function getNextOpenPeriodDate(clientId, docDateStr) {
+    // Returns suggested posting dates when period is closed
+    const today = new Date();
+    const currentYear = today.getFullYear();
+    const currentMonth = today.getMonth(); // 0-indexed
+    // First day of current month
+    const firstOfCurrent = `${(currentMonth+1).toString().padStart(2,"0")}/01/${currentYear}`;
+    // Last day of previous month
+    const lastOfPrev = new Date(currentYear, currentMonth, 0);
+    const lastOfPrevStr = `${(lastOfPrev.getMonth()+1).toString().padStart(2,"0")}/${lastOfPrev.getDate()}/${lastOfPrev.getFullYear()}`;
+    return { firstOfCurrent, lastOfPrev: lastOfPrevStr };
+  }
+
+  // Check if document date is in a closed period and handle accordingly
+  async function checkPeriodAndPost(client, result, ri) {
+    const ex = result.extracted;
+    const docDate = ex?.documentDate;
+    if (!docDate || !client) {
+      await postToQBO(client, result, ri);
+      return;
+    }
+    if (isPeriodClosed(client.id, docDate)) {
+      const periodKey = getPeriodKey(docDate);
+      const closedPeriods = getClosedPeriods(client.id);
+      const closedOn = closedPeriods[periodKey]?.closedOn;
+      const suggested = getNextOpenPeriodDate(client.id, docDate);
+      setPeriodModal({ result, ri, client, docDate, periodKey, closedOn, suggested });
+    } else {
+      await postToQBO(client, result, ri);
+    }
+  }
+
+  // ── GL Learning Engine ───────────────────────────────────────────────
   function getGLMemory(clientId) {
     try { return JSON.parse(localStorage.getItem(`gl_memory_${clientId}`) || "{}"); } catch { return {}; }
   }
@@ -315,6 +421,66 @@ function App() {
 
     // 4. No suggestion — must select manually
     return { account: null, source: "none", confidence: 0 };
+  }
+
+  // ── Processed Files Tracking ────────────────────────────────────────
+  function getProcessedFiles(clientId) {
+    try { return JSON.parse(localStorage.getItem(`processed_files_${clientId}`) || "{}"); } catch { return {}; }
+  }
+
+  function markFileProcessed(clientId, fileId, fileName, qboId, txType) {
+    const processed = getProcessedFiles(clientId);
+    processed[fileId] = { fileName, qboId, txType, processedAt: new Date().toISOString() };
+    localStorage.setItem(`processed_files_${clientId}`, JSON.stringify(processed));
+  }
+
+  function isFileProcessed(clientId, fileId) {
+    const processed = getProcessedFiles(clientId);
+    return !!processed[fileId];
+  }
+
+  // Detect transaction type from folder name
+  function detectTxTypeFromFolder(folderPath, client) {
+    const path = folderPath.map(p => p.name).join("/").toLowerCase();
+    const billsFolder = (client?.billsFolderName || "vendor bills").toLowerCase();
+    const expensesFolder = (client?.expensesFolderName || "petty cash").toLowerCase();
+    if (path.includes(billsFolder)) return "Bill";
+    if (path.includes(expensesFolder)) return "Expense";
+    return null; // Unknown — let AI decide
+  }
+
+  // Move file to Done folder via Graph API
+  async function moveFileToDone(fileId, driveId, currentFolderPath, client, token) {
+    try {
+      const doneFolderName = client?.doneFolderName || "✅ Done";
+      const parentId = currentFolderPath[currentFolderPath.length - 1]?.id;
+      // Check if Done folder exists, create if not
+      let doneFolderId;
+      try {
+        const existing = await gFetch(
+          `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${parentId}/children?$filter=name eq '${encodeURIComponent(doneFolderName)}'`,
+          token
+        );
+        if (existing.value?.length > 0) {
+          doneFolderId = existing.value[0].id;
+        } else {
+          // Create Done folder
+          const created = await fetch(
+            `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${parentId}/children`,
+            { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+              body: JSON.stringify({ name: doneFolderName, folder: {}, "@microsoft.graph.conflictBehavior": "rename" }) }
+          );
+          const data = await created.json();
+          doneFolderId = data.id;
+        }
+      } catch(e) { console.warn("Could not find/create Done folder:", e); return; }
+      // Move file
+      await fetch(
+        `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${fileId}`,
+        { method: "PATCH", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ parentReference: { id: doneFolderId } }) }
+      );
+    } catch(e) { console.warn("Move to Done failed:", e); }
   }
 
   async function postToQBO(client, result, ri) {
@@ -435,7 +601,7 @@ function App() {
           TxnDate: ex.documentDate,
           DueDate: ex.dueDate || ex.documentDate,
           DocNumber: ex.documentNumber,
-          PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}`,
+          PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
           Line: resolvedLines.map(l => ({
             Amount: Math.abs(l.amount),
             DetailType: "AccountBasedExpenseLineDetail",
@@ -456,7 +622,7 @@ function App() {
           EntityRef: vendorRef,
           TxnDate: ex.documentDate,
           DocNumber: ex.documentNumber,
-          PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}`,
+          PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
           Line: resolvedLines.map(l => ({
             Amount: Math.abs(l.amount),
             DetailType: "AccountBasedExpenseLineDetail",
@@ -489,8 +655,17 @@ function App() {
         } catch(e) { console.warn("Attachment failed:", e); }
       }
 
+      // Mark as processed and move to Done folder
+      if (result.fileId) {
+        markFileProcessed(client.id, result.fileId, result.file, txId, txType);
+        if (graphToken && result.driveId && result.folderPath) {
+          await moveFileToDone(result.fileId, result.driveId, result.folderPath, client, graphToken);
+        }
+      }
+
       setPostStatus(s=>({...s,[ri]:{status:"posted", qboId: txId, txType}}));
     } catch(e) {
+      logError("QBO Post Failed", e, { clientName: client.name, fileName: result.file, realmId: client.qboRealmId });
       setPostStatus(s=>({...s,[ri]:{status:"error", error: e.message}}));
     }
   }
@@ -726,7 +901,14 @@ function App() {
           setProgress({current:i+1,total:toProcess.length,message:`${file.name}: ${msg}`});
           setStage(msg.includes("OCR")||msg.includes("vision")?STAGES.ANALYZING:STAGES.EXTRACTING);
         });
-        newResults.push({file:file.name,extracted,fileData:b64,source:"teams"});
+        // Override transaction type based on folder name
+        const detectedType = detectTxTypeFromFolder(folderPath, clients.find(c=>c.id===activeClient));
+        if (extracted && detectedType) extracted.transactionType = detectedType;
+        newResults.push({
+          file: file.name, extracted, fileData: b64, source: "teams",
+          fileId: file.id, driveId: folderPath[folderPath.length-1]?.driveId,
+          folderPath: [...folderPath]
+        });
       }catch(err){newResults.push({file:file.name,extracted:null,error:err.message});}
     }
     const sel={};
@@ -827,7 +1009,7 @@ function App() {
 
         {/* Nav */}
         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
-          {[{v:VIEWS.PROCESS,l:"📄 Process"},{v:VIEWS.CLIENTS,l:"🏢 Clients"},{v:VIEWS.SETTINGS,l:"⚙ Settings"}].map(({v,l})=>(
+          {[{v:VIEWS.PROCESS,l:"📄 Process"},{v:VIEWS.CLIENTS,l:"🏢 Clients"},{v:VIEWS.SETTINGS,l:"⚙ Settings"},{v:VIEWS.SUPPORT,l:"❓ Support"}].map(({v,l})=>(
             <button key={v} onClick={()=>setView(v)} style={{...btnSecondary,borderColor:view===v?"#3b82f6":"#1e3a5f",color:view===v?"#3b82f6":"#64748b"}}>{l}</button>
           ))}
           <input type="file" id="import-client" accept=".json" onChange={importClient} style={{display:"none"}}/>
@@ -907,6 +1089,7 @@ function App() {
                     {!client.qboConnected && client.qboClientId && (
                       <button className="btn" style={{...btnPrimary,fontSize:10,padding:"6px 12px",background:"linear-gradient(135deg,#0078d4,#106ebe)"}} onClick={()=>connectQBO(client)}>🔗 Connect QBO</button>
                     )}
+                    <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={()=>{setActiveClient(client.id);setShowPeriods(true);}}>📅 Periods</button>
                     <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={()=>exportClient(client)}>📤 Export</button>
                     <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={()=>{
                       setActiveClient(client.id);
@@ -986,6 +1169,26 @@ function App() {
                   <select value={editingClient.qboEnv||"sandbox"} onChange={e=>setEditingClient(c=>({...c,qboEnv:e.target.value}))} style={inputStyle}>
                     <option value="sandbox">Sandbox (Testing)</option>
                     <option value="production">Production (Live)</option>
+                  </select>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Bills Folder Name in Teams</label>
+                  <input value={editingClient.billsFolderName||"Vendor Bills"} onChange={e=>setEditingClient(c=>({...c,billsFolderName:e.target.value}))} placeholder="Vendor Bills" style={inputStyle}/>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Expenses Folder Name in Teams</label>
+                  <input value={editingClient.expensesFolderName||"Petty Cash"} onChange={e=>setEditingClient(c=>({...c,expensesFolderName:e.target.value}))} placeholder="Petty Cash" style={inputStyle}/>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Done Folder Name</label>
+                  <input value={editingClient.doneFolderName||"✅ Done"} onChange={e=>setEditingClient(c=>({...c,doneFolderName:e.target.value}))} placeholder="✅ Done" style={inputStyle}/>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Auto-Processing Schedule</label>
+                  <select value={editingClient.autoSchedule||"manual"} onChange={e=>setEditingClient(c=>({...c,autoSchedule:e.target.value}))} style={inputStyle}>
+                    <option value="manual">Manual only</option>
+                    <option value="nightly">Nightly (11pm)</option>
+                    <option value="realtime">Real-time (on file upload)</option>
                   </select>
                 </div>
               </div>
@@ -1099,10 +1302,24 @@ function App() {
                           <>
                             <div style={{...card,overflow:"hidden",marginBottom:16}}>
                               <div style={{padding:"12px 16px",borderBottom:"1px solid #162032",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                                <div style={{fontSize:11,color:"#475569",letterSpacing:"0.1em"}}>{graphFiles.filter(f=>f.folder).length} FOLDERS · {graphFiles.filter(f=>!f.folder).length} PDFs · {Object.values(selectedFiles).filter(Boolean).length} SELECTED</div>
-                                <button onClick={()=>{const pdfs=graphFiles.filter(f=>!f.folder);const all=pdfs.every(f=>selectedFiles[f.id]);const s={};pdfs.forEach(f=>{s[f.id]=!all;});setSelectedFiles(s);}} style={{...btnSecondary,fontSize:10,padding:"4px 10px"}}>
-                                  {graphFiles.filter(f=>!f.folder).every(f=>selectedFiles[f.id])?"DESELECT ALL":"SELECT ALL PDFs"}
-                                </button>
+                                <div style={{fontSize:11,color:"#475569",letterSpacing:"0.1em"}}>
+                                  {graphFiles.filter(f=>f.folder).length} FOLDERS · {graphFiles.filter(f=>!f.folder).length} PDFs
+                                  {activeClient && (() => {
+                                    const unprocessed = graphFiles.filter(f=>!f.folder&&!isFileProcessed(activeClient,f.id)).length;
+                                    return unprocessed > 0 ? <span style={{color:"#f59e0b",marginLeft:8}}>· {unprocessed} NEW</span> : null;
+                                  })()}
+                                  · {Object.values(selectedFiles).filter(Boolean).length} SELECTED
+                                </div>
+                                <div style={{display:"flex",gap:6}}>
+                                  <button onClick={()=>{
+                                    const s={};
+                                    graphFiles.filter(f=>!f.folder&&!isFileProcessed(activeClient,f.id)).forEach(f=>{s[f.id]=true;});
+                                    setSelectedFiles(s);
+                                  }} style={{...btnGreen,fontSize:10,padding:"4px 10px"}}>⚡ New Only</button>
+                                  <button onClick={()=>{const pdfs=graphFiles.filter(f=>!f.folder);const all=pdfs.every(f=>selectedFiles[f.id]);const s={};pdfs.forEach(f=>{s[f.id]=!all;});setSelectedFiles(s);}} style={{...btnSecondary,fontSize:10,padding:"4px 10px"}}>
+                                    {graphFiles.filter(f=>!f.folder).every(f=>selectedFiles[f.id])?"DESELECT ALL":"SELECT ALL"}
+                                  </button>
+                                </div>
                               </div>
                               {graphFiles.length===0&&<div style={{padding:32,textAlign:"center",color:"#334155",fontSize:13}}><div style={{fontSize:28,marginBottom:12}}>📂</div>No folders or PDFs here</div>}
                               {graphFiles.map(item=>(
@@ -1111,7 +1328,12 @@ function App() {
                                   {!item.folder&&<div style={{width:14,height:14,borderRadius:3,border:`2px solid ${selectedFiles[item.id]?"#3b82f6":"#1e3a5f"}`,background:selectedFiles[item.id]?"#3b82f6":"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:8,color:"#fff",flexShrink:0}}>{selectedFiles[item.id]?"✓":""}</div>}
                                   <span style={{fontSize:16}}>{item.folder?"📂":"📄"}</span>
                                   <div style={{flex:1}}>
-                                    <div style={{fontSize:13,color:item.folder?"#94a3b8":"#e2e8f0"}}>{item.name}</div>
+                                    <div style={{fontSize:13,color:item.folder?"#94a3b8":"#e2e8f0",display:"flex",alignItems:"center",gap:8}}>
+                                      {item.name}
+                                      {!item.folder&&isFileProcessed(activeClient,item.id)&&(
+                                        <span style={{fontSize:9,padding:"1px 6px",background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.2)",borderRadius:3,color:"#10b981",whiteSpace:"nowrap"}}>✅ Posted</span>
+                                      )}
+                                    </div>
                                     <div style={{fontSize:10,color:"#334155"}}>{item.folder?`${item.folder.childCount??""} items`:item.size?`${Math.round(item.size/1024)}KB`:""}{item.lastModifiedDateTime?` · ${new Date(item.lastModifiedDateTime).toLocaleDateString()}`:""}</div>
                                   </div>
                                   {item.folder&&<span style={{color:"#334155",fontSize:14}}>›</span>}
@@ -1158,7 +1380,7 @@ function App() {
                     {currentClient?.qboConnected && (
                       <button className="btn" style={btnGreen} onClick={()=>{
                         results.forEach((r,ri)=>{
-                          if(r.extracted&&!postStatus[ri])postToQBO(currentClient,r,ri);
+                          if(r.extracted&&!postStatus[ri])checkPeriodAndPost(currentClient,r,ri);
                         });
                       }}>🚀 Post All to QBO</button>
                     )}
@@ -1243,7 +1465,7 @@ function App() {
                           {/* Individual post button */}
                           {currentClient?.qboConnected && !ps && (
                             <div style={{padding:"12px 16px",borderTop:"1px solid #162032",display:"flex",justifyContent:"flex-end",gap:8}}>
-                              <button className="btn" style={{...btnGreen,fontSize:11,padding:"7px 16px"}} onClick={()=>postToQBO(currentClient,result,ri)}>
+                              <button className="btn" style={{...btnGreen,fontSize:11,padding:"7px 16px"}} onClick={()=>checkPeriodAndPost(currentClient,result,ri)}>
                                 🚀 Post {ex.transactionType||"Bill"} to QBO
                               </button>
                             </div>
@@ -1269,6 +1491,188 @@ function App() {
           </div>
         )}
       </div>
+
+        {/* ═══ SUPPORT ═══ */}
+        {view===VIEWS.SUPPORT && (
+          <div style={{animation:"fadeUp 0.3s ease",maxWidth:680}}>
+            <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>HELP & SUPPORT</div>
+            <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9",marginBottom:24}}>Support Centre</div>
+            <div style={{...card,padding:20,marginBottom:16}}>
+              <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:16}}>CONTACT ADMINISTRATOR</div>
+              <div style={{fontSize:13,color:"#94a3b8",lineHeight:2}}>
+                <div>For assistance with the Extract application please contact:</div>
+                <div style={{marginTop:12,padding:14,background:"rgba(22,32,50,0.5)",borderRadius:8}}>
+                  <div style={{color:"#e2e8f0",fontWeight:"bold",marginBottom:4}}>Taylor HSL Accounting</div>
+                  <div>📧 <a href="mailto:support@taylorhsl.com" style={{color:"#3b82f6"}}>support@taylorhsl.com</a></div>
+                  <div style={{marginTop:4,fontSize:11,color:"#475569"}}>Please include your client name and attach the error log when reporting issues.</div>
+                </div>
+              </div>
+            </div>
+            <div style={{...card,padding:20,marginBottom:16}}>
+              <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:16}}>APPLICATION INFORMATION</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,fontSize:12}}>
+                {[{label:"App Name",value:"Extract — AI Accounting"},{label:"Version",value:"1.0.0"},{label:"Environment",value:"Production"},{label:"Proxy Server",value:"Vercel (Singapore)"},{label:"AI Provider",value:"Anthropic Claude"},{label:"QBO Integration",value:"Intuit OAuth 2.0"}].map(({label,value})=>(
+                  <div key={label} style={{padding:"8px 12px",background:"rgba(22,32,50,0.4)",borderRadius:6}}>
+                    <div style={{fontSize:10,color:"#475569",marginBottom:3}}>{label}</div>
+                    <div style={{color:"#e2e8f0"}}>{value}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{...card,padding:20,marginBottom:16}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+                <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em"}}>ERROR LOGS</div>
+                <div style={{display:"flex",gap:8}}>
+                  <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 12px"}} onClick={()=>{if(confirm("Clear all error logs?")){localStorage.removeItem("extract_error_logs");alert("Logs cleared.");}}}>🗑️ Clear</button>
+                  <button className="btn" style={{...btnPrimary,fontSize:10,padding:"4px 12px"}} onClick={exportErrorLogs}>📥 Export Logs</button>
+                </div>
+              </div>
+              {getErrorLogs().length===0 ? (
+                <div style={{textAlign:"center",padding:20,color:"#334155",fontSize:13}}>No errors logged ✅</div>
+              ) : (
+                <div style={{maxHeight:300,overflow:"auto"}}>
+                  {getErrorLogs().slice(0,20).map((log,i)=>(
+                    <div key={i} style={{padding:"10px 12px",borderBottom:"1px solid rgba(22,32,50,0.6)",fontSize:11}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                        <span style={{color:"#ef4444",fontWeight:"bold"}}>{log.context}</span>
+                        <span style={{color:"#334155"}}>{new Date(log.timestamp).toLocaleString()}</span>
+                      </div>
+                      <div style={{color:"#94a3b8"}}>{log.error}</div>
+                      {log.intuitTid&&<div style={{color:"#475569",marginTop:2}}>intuit_tid: {log.intuitTid}</div>}
+                      {log.clientName&&<div style={{color:"#475569"}}>Client: {log.clientName}</div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{...card,padding:20}}>
+              <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:16}}>EXTERNAL RESOURCES</div>
+              {[{label:"QuickBooks Online Support",url:"https://quickbooks.intuit.com/learn-support/",desc:"Official QBO help and community"},{label:"Intuit Developer Support",url:"https://developer.intuit.com/app/developer/qbo/docs/get-started",desc:"API documentation and developer support"},{label:"Microsoft 365 Support",url:"https://support.microsoft.com/en-us/microsoft-365",desc:"Teams and SharePoint help"}].map(({label,url,desc})=>(
+                <a key={label} href={url} target="_blank" style={{display:"block",padding:"10px 14px",borderBottom:"1px solid rgba(22,32,50,0.6)",textDecoration:"none"}}>
+                  <div style={{fontSize:13,color:"#3b82f6"}}>{label}</div>
+                  <div style={{fontSize:11,color:"#475569",marginTop:2}}>{desc}</div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+      {/* ═══ PERIOD MODAL ═══ */}
+      {periodModal && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}}>
+          <div style={{background:"#0d1b35",border:"1px solid #1e3a5f",borderRadius:14,padding:28,maxWidth:480,width:"90%",animation:"fadeUp 0.2s ease"}}>
+            <div style={{fontSize:11,color:"#f59e0b",letterSpacing:"0.15em",marginBottom:8}}>⚠️ LATE DOCUMENT — PERIOD CLOSED</div>
+            <div style={{fontSize:16,fontWeight:"bold",color:"#f1f5f9",marginBottom:16}}>Posting Date Required</div>
+            
+            <div style={{background:"rgba(22,32,50,0.5)",borderRadius:8,padding:14,marginBottom:20,fontSize:12}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,color:"#94a3b8"}}>
+                <div>Document date:</div><div style={{color:"#e2e8f0",fontWeight:"bold"}}>{periodModal.docDate}</div>
+                <div>Period:</div><div style={{color:"#e2e8f0"}}>{getPeriodLabel(periodModal.periodKey)}</div>
+                <div>Period closed on:</div><div style={{color:"#ef4444"}}>{periodModal.closedOn}</div>
+              </div>
+            </div>
+
+            <div style={{fontSize:12,color:"#475569",marginBottom:12}}>Select posting date:</div>
+            {[
+              {label:`1st of current month`, date:periodModal.suggested?.firstOfCurrent},
+              {label:`Last day of previous month`, date:periodModal.suggested?.lastOfPrev},
+            ].map(opt=>(
+              <button key={opt.date} onClick={async()=>{
+                const modified = {...periodModal.result, extracted:{...periodModal.result.extracted, documentDate:opt.date, originalDocumentDate:periodModal.docDate}};
+                setPeriodModal(null);
+                await postToQBO(periodModal.client, modified, periodModal.ri);
+              }} style={{width:"100%",padding:"10px 16px",background:"rgba(22,32,50,0.6)",border:"1px solid #1e3a5f",borderRadius:8,color:"#e2e8f0",cursor:"pointer",fontSize:12,textAlign:"left",marginBottom:8,fontFamily:"monospace",display:"flex",justifyContent:"space-between"}}>
+                <span>{opt.label}</span>
+                <span style={{color:"#3b82f6",fontWeight:"bold"}}>{opt.date}</span>
+              </button>
+            ))}
+
+            {/* Custom date */}
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:11,color:"#475569",marginBottom:6}}>Custom date (MM/DD/YYYY):</div>
+              <div style={{display:"flex",gap:8}}>
+                <input id="custom-period-date" placeholder="MM/DD/YYYY" style={{flex:1,padding:"9px 12px",background:"rgba(22,32,50,0.6)",border:"1px solid #1e3a5f",borderRadius:7,color:"#e2e8f0",fontSize:12,fontFamily:"monospace"}}/>
+                <button onClick={async()=>{
+                  const customDate = document.getElementById("custom-period-date").value;
+                  if (!customDate.match(/^\d{2}\/\d{2}\/\d{4}$/)) { alert("Please enter date as MM/DD/YYYY"); return; }
+                  const modified = {...periodModal.result, extracted:{...periodModal.result.extracted, documentDate:customDate, originalDocumentDate:periodModal.docDate}};
+                  setPeriodModal(null);
+                  await postToQBO(periodModal.client, modified, periodModal.ri);
+                }} style={{padding:"9px 16px",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:"bold"}}>Use</button>
+              </div>
+            </div>
+
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <button onClick={()=>setPeriodModal(null)} style={{padding:"9px 18px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:7,color:"#64748b",cursor:"pointer",fontSize:12,fontFamily:"monospace"}}>Skip Document</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ PERIODS PANEL (inside Clients view) ═══ */}
+      {showPeriods && activeClient && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.7)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}}>
+          <div style={{background:"#0d1b35",border:"1px solid #1e3a5f",borderRadius:14,padding:28,maxWidth:560,width:"90%",maxHeight:"80vh",overflow:"auto",animation:"fadeUp 0.2s ease"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+              <div>
+                <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>PERIOD MANAGEMENT</div>
+                <div style={{fontSize:16,fontWeight:"bold",color:"#f1f5f9"}}>{clients.find(c=>c.id===activeClient)?.name}</div>
+              </div>
+              <button onClick={()=>setShowPeriods(false)} style={{background:"transparent",border:"none",color:"#475569",cursor:"pointer",fontSize:20}}>✕</button>
+            </div>
+
+            {/* Close a period */}
+            <div style={{background:"rgba(22,32,50,0.4)",borderRadius:8,padding:14,marginBottom:20}}>
+              <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.1em",marginBottom:12}}>CLOSE A PERIOD</div>
+              <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                <select id="period-to-close" style={{flex:1,padding:"9px 12px",background:"rgba(22,32,50,0.6)",border:"1px solid #1e3a5f",borderRadius:7,color:"#e2e8f0",fontSize:12,fontFamily:"monospace"}}>
+                  {Array.from({length:12},(_,i)=>{
+                    const d = new Date(); d.setMonth(d.getMonth()-i);
+                    const key = `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,"0")}`;
+                    const closed = getClosedPeriods(activeClient)[key];
+                    return <option key={key} value={key}>{getPeriodLabel(key)}{closed?" 🔒":""}</option>;
+                  })}
+                </select>
+                <input id="close-date" type="text" placeholder="Close date MM/DD/YYYY" style={{flex:1,padding:"9px 12px",background:"rgba(22,32,50,0.6)",border:"1px solid #1e3a5f",borderRadius:7,color:"#e2e8f0",fontSize:12,fontFamily:"monospace"}}
+                  defaultValue={`${(new Date().getMonth()+1).toString().padStart(2,"0")}/${new Date().getDate().toString().padStart(2,"0")}/${new Date().getFullYear()}`}/>
+                <button onClick={()=>{
+                  const key = document.getElementById("period-to-close").value;
+                  const closeDate = document.getElementById("close-date").value;
+                  savePeriodClose(activeClient, key, closeDate);
+                  setClients([...clients]); // Force re-render
+                  alert(`✅ ${getPeriodLabel(key)} closed on ${closeDate}`);
+                }} style={{padding:"9px 16px",background:"linear-gradient(135deg,#ef4444,#dc2626)",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:"bold",whiteSpace:"nowrap"}}>🔒 Close Period</button>
+              </div>
+            </div>
+
+            {/* Period list */}
+            <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.1em",marginBottom:12}}>PERIOD STATUS (LAST 12 MONTHS)</div>
+            {Array.from({length:12},(_,i)=>{
+              const d = new Date(); d.setMonth(d.getMonth()-i);
+              const key = `${d.getFullYear()}-${(d.getMonth()+1).toString().padStart(2,"0")}`;
+              const closed = getClosedPeriods(activeClient)[key];
+              return (
+                <div key={key} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 14px",borderBottom:"1px solid rgba(22,32,50,0.6)",background:"transparent"}}>
+                  <div>
+                    <div style={{fontSize:13,color:"#e2e8f0"}}>{getPeriodLabel(key)}</div>
+                    {closed && <div style={{fontSize:10,color:"#475569"}}>Closed on {closed.closedOn}</div>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    {closed
+                      ? <>
+                          <span style={{padding:"3px 10px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:4,fontSize:10,color:"#ef4444"}}>🔒 CLOSED</span>
+                          <button onClick={()=>{if(confirm(`Reopen ${getPeriodLabel(key)}?`)){reopenPeriod(activeClient,key);setClients([...clients]);}}} style={{padding:"3px 10px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:4,color:"#64748b",cursor:"pointer",fontSize:10,fontFamily:"monospace"}}>Reopen</button>
+                        </>
+                      : <span style={{padding:"3px 10px",background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.2)",borderRadius:4,fontSize:10,color:"#10b981"}}>✅ OPEN</span>
+                    }
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
