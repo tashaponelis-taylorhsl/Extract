@@ -170,6 +170,7 @@ function App() {
   const [duplicateCheck, setDuplicateCheck] = useState(null); // {result, matches, ri}
   const [periodModal, setPeriodModal] = useState(null); // {result, ri, suggestedDates}
   const [complianceModal, setComplianceModal] = useState(null); // {result, ri, report}
+  const [glModal, setGlModal] = useState(null); // {resolve, reject, description, vendor, suggestion, accounts}
   const [showPeriods, setShowPeriods] = useState(false);
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
   const fileInputRef = useRef();
@@ -746,34 +747,26 @@ function App() {
           client.id, ex.vendor, ex.transactionType, description, aiSuggestedName, expenseAccounts, client.customRules
         );
 
-        // Always show confirmation with dropdown — never post silently
-        // Build account list for dropdown
-        const accountOptions = expenseAccounts.map((a,i) => `${i+1}. ${a.name}`).join("\n");
+        // Show GL account modal picker
         const sourceLabel = {
-          "rule": "📋 Custom rule match",
-          "learned": "🧠 Learned from history",
+          "rule": "📋 Custom rule",
+          "learned": "🧠 Learned",
           "ai": "🤖 AI suggested",
-          "ai_fuzzy": "🤖 AI fuzzy match",
+          "ai_fuzzy": "🤖 AI fuzzy",
           "none": "❓ No suggestion"
         }[suggestion.source] || "🤖 AI suggested";
 
-        const suggestedIndex = suggestion.account 
-          ? expenseAccounts.findIndex(a => a.name === suggestion.account) + 1 
-          : 1;
-
-        const selected = window.prompt(
-          `GL Account for: "${description}"\nVendor: ${ex.vendor||"Unknown"}\n\n${sourceLabel}: "${suggestion.account||"None"}"\n(${suggestion.confidence}% confidence)\n\nAvailable accounts:\n${accountOptions.slice(0,3000)}\n\nEnter account NUMBER (suggested: ${suggestedIndex}):`,
-          String(suggestedIndex)
-        );
-
-        if (!selected) return null;
-        const idx = parseInt(selected) - 1;
-        const picked = expenseAccounts[idx];
-        if (!picked) {
-          alert("Invalid selection. Please enter a number from the list.");
-          return null;
-        }
-        return { value: picked.id, name: picked.name };
+        return new Promise((resolve) => {
+          setGlModal({
+            resolve,
+            description,
+            vendor: ex.vendor || "",
+            suggestion: suggestion.account,
+            suggestionSource: sourceLabel,
+            suggestionConfidence: suggestion.confidence,
+            accounts: expenseAccounts,
+          });
+        });
       };
 
       // Vendor matching — required for Bills, optional for Expenses
@@ -915,10 +908,17 @@ function App() {
         txType = "Bill";
       } else {
         // Expense / Purchase
-        const pettyCashAcc = accounts.find(a => a.name.toLowerCase().includes("petty") || a.name.toLowerCase().includes("cash"));
+        // Find petty cash account — check client config name first, then search
+        const pettyCashName = client.pettyCashAccount || "Petty Cash";
+        const pettyCashAcc = accounts.find(a => a.name.toLowerCase() === pettyCashName.toLowerCase()) ||
+                             accounts.find(a => a.name.toLowerCase().includes("petty")) ||
+                             accounts.find(a => a.name.toLowerCase().includes("cash") && a.type === "Bank");
+        if (!pettyCashAcc) {
+          throw new Error(`Petty Cash account "${pettyCashName}" not found in Chart of Accounts. Please check client settings.`);
+        }
         const expBody = {
           PaymentType: "Cash",
-          AccountRef: pettyCashAcc ? { value: pettyCashAcc.id, name: pettyCashAcc.name } : { value: "1", name: "Petty Cash" },
+          AccountRef: { value: pettyCashAcc.id, name: pettyCashAcc.name },
           // EntityRef is optional for petty cash — only include if vendor was matched
           ...(vendorRef ? { EntityRef: vendorRef } : {}),
           TxnDate: ex.documentDate,
@@ -932,8 +932,11 @@ function App() {
             Description: l.description
           }))
         };
+        console.log("Posting expense body:", JSON.stringify(expBody));
         const res = await qboPost(client, "/purchase", expBody);
-        if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Message || "Expense creation failed");
+        console.log("Expense response:", JSON.stringify(res));
+        if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Detail || res.Fault.Error?.[0]?.Message || "Expense creation failed");
+        if (!res.Purchase?.Id) throw new Error("Expense created but no ID returned — check QBO");
         txId = res.Purchase?.Id;
         txType = "Expense";
       }
@@ -1890,6 +1893,66 @@ function App() {
             </div>
           </div>
         )}
+
+      {/* ═══ GL ACCOUNT MODAL ═══ */}
+      {glModal && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:20}}>
+          <div style={{background:"#0d1b35",border:"1px solid #1e3a5f",borderRadius:14,padding:28,maxWidth:580,width:"100%",maxHeight:"90vh",display:"flex",flexDirection:"column",animation:"fadeUp 0.2s ease"}}>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>GL ACCOUNT SELECTION</div>
+              <div style={{fontSize:14,fontWeight:"bold",color:"#f1f5f9",marginBottom:4}}>"{glModal.description}"</div>
+              {glModal.vendor&&<div style={{fontSize:11,color:"#475569"}}>Vendor: {glModal.vendor}</div>}
+            </div>
+
+            {/* Suggestion */}
+            {glModal.suggestion && (
+              <div style={{padding:"10px 14px",background:"rgba(59,130,246,0.08)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:8,marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <div>
+                  <div style={{fontSize:10,color:"#3b82f6",marginBottom:3}}>{glModal.suggestionSource} ({glModal.suggestionConfidence}% confidence)</div>
+                  <div style={{fontSize:13,color:"#e2e8f0",fontWeight:"bold"}}>{glModal.suggestion}</div>
+                </div>
+                <button onClick={()=>{
+                  const acc = glModal.accounts.find(a=>a.name===glModal.suggestion);
+                  if(acc){glModal.resolve({value:acc.id,name:acc.name});setGlModal(null);}
+                }} style={{padding:"8px 16px",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:"bold",whiteSpace:"nowrap"}}>
+                  ✓ Use This
+                </button>
+              </div>
+            )}
+
+            {/* Search and full list */}
+            <div style={{fontSize:11,color:"#475569",marginBottom:8}}>Or select from all accounts:</div>
+            <input
+              id="gl-search"
+              placeholder="Search accounts..."
+              onChange={e=>{
+                const val = e.target.value.toLowerCase();
+                document.querySelectorAll(".gl-account-item").forEach(el=>{
+                  el.style.display = el.dataset.name.includes(val) ? "flex" : "none";
+                });
+              }}
+              style={{width:"100%",padding:"8px 12px",background:"rgba(22,32,50,0.6)",border:"1px solid #1e3a5f",borderRadius:7,color:"#e2e8f0",fontSize:12,fontFamily:"monospace",marginBottom:8}}
+            />
+            <div style={{flex:1,overflow:"auto",border:"1px solid #162032",borderRadius:8}}>
+              {glModal.accounts.map((acc,i)=>(
+                <div key={acc.id} className="gl-account-item fh" data-name={acc.name.toLowerCase()}
+                  onClick={()=>{glModal.resolve({value:acc.id,name:acc.name});setGlModal(null);}}
+                  style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px",borderBottom:"1px solid rgba(22,32,50,0.6)",cursor:"pointer",background:acc.name===glModal.suggestion?"rgba(59,130,246,0.06)":"transparent"}}>
+                  <div>
+                    <div style={{fontSize:12,color:acc.name===glModal.suggestion?"#3b82f6":"#e2e8f0"}}>{acc.name}</div>
+                    <div style={{fontSize:10,color:"#334155"}}>{acc.type}</div>
+                  </div>
+                  {acc.name===glModal.suggestion&&<span style={{fontSize:10,color:"#3b82f6"}}>★ suggested</span>}
+                </div>
+              ))}
+            </div>
+
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16}}>
+              <button onClick={()=>{glModal.resolve(null);setGlModal(null);}} style={{padding:"9px 18px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:7,color:"#64748b",cursor:"pointer",fontSize:12,fontFamily:"monospace"}}>Cancel — Skip Document</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══ COMPLIANCE MODAL ═══ */}
       {complianceModal && (
