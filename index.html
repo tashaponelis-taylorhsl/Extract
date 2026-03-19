@@ -365,29 +365,38 @@ function App() {
     try {
       const txType = existingTx._type;
       const txId = existingTx.Id;
-      const syncToken = existingTx.SyncToken;
 
-      // Build sparse update — only update the PrivateNote/custom field
-      // QBO requires SyncToken for updates
-      let updateBody;
+      // Fetch full transaction to get latest SyncToken — required for updates
+      const endpoint = txType === "Bill" ? `/bill/${txId}` : `/purchase/${txId}`;
+      const fullTxData = await qboGet(client, endpoint);
+      const fullTx = txType === "Bill" ? fullTxData.Bill : fullTxData.Purchase;
+      
+      if (!fullTx) throw new Error(`Could not fetch ${txType} #${txId} for update`);
+      
+      const syncToken = fullTx.SyncToken;
+      const currentNote = fullTx.PrivateNote || "";
+
+      // Build sparse update with latest SyncToken
+      const updatedNote = currentNote + ` | Tax Invoice: ${taxInvoiceNumber} (added ${new Date().toLocaleDateString()})`;
+      
       if (txType === "Bill") {
-        updateBody = {
+        const updateBody = {
           Id: txId,
           SyncToken: syncToken,
           sparse: true,
-          PrivateNote: (existingTx.PrivateNote||"") + ` | Tax Invoice: ${taxInvoiceNumber} (added ${new Date().toLocaleDateString()})`,
+          PrivateNote: updatedNote,
         };
         const res = await qboPost(client, "/bill", updateBody);
-        if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Message || "Update failed");
+        if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Detail || res.Fault.Error?.[0]?.Message || "Update failed");
       } else {
-        updateBody = {
+        const updateBody = {
           Id: txId,
           SyncToken: syncToken,
           sparse: true,
-          PrivateNote: (existingTx.PrivateNote||"") + ` | Tax Invoice: ${taxInvoiceNumber} (added ${new Date().toLocaleDateString()})`,
+          PrivateNote: updatedNote,
         };
         const res = await qboPost(client, "/purchase", updateBody);
-        if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Message || "Update failed");
+        if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Detail || res.Fault.Error?.[0]?.Message || "Update failed");
       }
 
       // Attach new PDF to existing transaction
