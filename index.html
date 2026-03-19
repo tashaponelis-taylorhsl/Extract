@@ -738,9 +738,9 @@ function App() {
       const accounts = client.chartOfAccounts || [];
 
       // GL account resolution with learning
-      const expenseAccounts = accounts.filter(a => 
-        ["Expense","Cost of Goods Sold","Other Expense","Accounts Payable","Other Current Liability"].includes(a.type)
-      );
+      // All accounts available — petty cash can post to any account type
+      // (expenses, assets, liabilities etc.)
+      const expenseAccounts = accounts;
 
       const resolveGLAccount = async (aiSuggestedName, description) => {
         const suggestion = suggestGLAccount(
@@ -912,7 +912,7 @@ function App() {
         const pettyCashName = client.pettyCashAccount || "Petty Cash";
         const pettyCashAcc = accounts.find(a => a.name.toLowerCase() === pettyCashName.toLowerCase()) ||
                              accounts.find(a => a.name.toLowerCase().includes("petty")) ||
-                             accounts.find(a => a.name.toLowerCase().includes("cash") && a.type === "Bank");
+                             accounts.find(a => a.name.toLowerCase().includes("cash") && ["Bank","Other Current Asset"].includes(a.type));
         if (!pettyCashAcc) {
           throw new Error(`Petty Cash account "${pettyCashName}" not found in Chart of Accounts. Please check client settings.`);
         }
@@ -1108,7 +1108,9 @@ function App() {
     const client = clients.find(c=>c.id===activeClient);
     // Limit COA to expense/liability accounts only to avoid stack overflow with large lists
     const allCoa = client?.chartOfAccounts || [];
-    const coa = allCoa.filter(a=>["Expense","Cost of Goods Sold","Other Expense","Accounts Payable","Other Current Liability"].includes(a.type)).slice(0,40);
+    // Exclude Revenue/Income accounts from AI suggestions (unlikely for expenses)
+    // but keep all others including Fixed Assets, Bank etc.
+    const coa = allCoa.filter(a=>!["Income","Other Income","Revenue"].includes(a.type)).slice(0,60);
     const businessType = client?.businessType || "General";
     const wfRules = buildWorkflowRules(client);
     const prompt = SYSTEM_PROMPT(coa, businessType, wfRules);
@@ -1934,13 +1936,16 @@ function App() {
               style={{width:"100%",padding:"8px 12px",background:"rgba(22,32,50,0.6)",border:"1px solid #1e3a5f",borderRadius:7,color:"#e2e8f0",fontSize:12,fontFamily:"monospace",marginBottom:8}}
             />
             <div style={{flex:1,overflow:"auto",border:"1px solid #162032",borderRadius:8}}>
-              {glModal.accounts.map((acc,i)=>(
+              {[...glModal.accounts].sort((a,b)=>{
+                const order = {"Expense":0,"Cost of Goods Sold":1,"Bank":2,"Other Current Asset":3,"Fixed Asset":4,"Other Asset":5,"Other Current Liability":6,"Accounts Payable":7,"Other Expense":8};
+                return (order[a.type]??9) - (order[b.type]??9) || a.name.localeCompare(b.name);
+              }).map((acc,i)=>(
                 <div key={acc.id} className="gl-account-item fh" data-name={acc.name.toLowerCase()}
                   onClick={()=>{glModal.resolve({value:acc.id,name:acc.name});setGlModal(null);}}
                   style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px",borderBottom:"1px solid rgba(22,32,50,0.6)",cursor:"pointer",background:acc.name===glModal.suggestion?"rgba(59,130,246,0.06)":"transparent"}}>
                   <div>
                     <div style={{fontSize:12,color:acc.name===glModal.suggestion?"#3b82f6":"#e2e8f0"}}>{acc.name}</div>
-                    <div style={{fontSize:10,color:"#334155"}}>{acc.type}</div>
+                    <div style={{fontSize:10,color:"#334155"}}>{acc.type}{acc.subtype?" · "+acc.subtype:""}</div>
                   </div>
                   {acc.name===glModal.suggestion&&<span style={{fontSize:10,color:"#3b82f6"}}>★ suggested</span>}
                 </div>
