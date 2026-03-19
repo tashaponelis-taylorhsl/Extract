@@ -403,21 +403,36 @@ function App() {
       }
 
       // Attach new PDF to existing transaction
+      // QBO Attachable API uses "Purchase" not "Expense" for expense transactions
+      const attachEntityType = txType === "Bill" ? "Bill" : "Purchase";
+      let attachError = null;
       if (fileData && txId) {
         try {
-          await fetch(`${PROXY}/api/qbo-attach`, {
+          const attachRes = await fetch(`${PROXY}/api/qbo-attach`, {
             method:"POST", headers:{"Content-Type":"application/json"},
             body: JSON.stringify({
               token: client.qboToken, realmId: client.qboRealmId,
               fileData, fileName,
-              entityType: txType, entityId: txId,
+              entityType: attachEntityType, entityId: String(txId),
               env: client.qboEnv || "sandbox"
             })
           });
-        } catch(e) { console.warn("Attachment failed:", e); }
+          const attachData = await attachRes.json();
+          console.log("Attach response:", JSON.stringify(attachData));
+          if (attachData.Fault) {
+            attachError = attachData.Fault.Error?.[0]?.Detail || attachData.Fault.Error?.[0]?.Message;
+            console.warn("Attach QBO error:", attachError);
+          } else if (attachData.error) {
+            attachError = attachData.error;
+            console.warn("Attach proxy error:", attachError);
+          }
+        } catch(e) { 
+          attachError = e.message;
+          console.warn("Attachment failed:", e); 
+        }
       }
 
-      return { success: true, txId, txType };
+      return { success: true, txId, txType, attachError };
     } catch(e) {
       return { success: false, error: e.message };
     }
@@ -664,6 +679,10 @@ function App() {
               result.fileData, result.file
             );
             if (updateResult.success) {
+              // Show attachment error if PDF failed
+              if (updateResult.attachError) {
+                console.warn("PDF attachment error:", updateResult.attachError);
+              }
               // If original was posted with pending VAT, create journal to move to confirmed
               if (ex.vatAmount > 0 && (best.PrivateNote||"").includes("Pending")) {
                 try {
