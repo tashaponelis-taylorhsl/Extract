@@ -74,8 +74,36 @@ Return ONLY this JSON (no markdown):
   "netPayable": 0,
   "transactionTypeReason": "brief reason why Bill or Expense",
   "isDuplicate": false,
-  "notes": ""
+  "notes": "",
+  "taxInvoiceCompliance": {
+    "hasThaiTaxInvoiceHeading": true,
+    "vendorName": true,
+    "vendorAddress": true,
+    "vendorVatNumber": true,
+    "vendorVatNumberValue": "0000000000000",
+    "vendorVatNumberValid": true,
+    "buyerName": true,
+    "buyerAddress": true,
+    "buyerVatNumber": false,
+    "buyerVatNumberValue": "",
+    "documentNumber": true,
+    "documentDate": true,
+    "serviceDescription": true,
+    "amountExVat": true,
+    "vatAmount": true,
+    "totalIncVat": true,
+    "vatRate7Percent": true,
+    "issuerSignatureOrStamp": false,
+    "complianceResult": "PASS|WARN|FAIL",
+    "issues": ["list of specific issues found"]
+  }
 }
+
+COMPLIANCE RULES (only fill taxInvoiceCompliance if document contains ใบกำกับภาษี):
+- vendorVatNumberValid: must be exactly 13 digits
+- complianceResult: PASS=all required fields present, WARN=minor issues (missing buyer VAT etc), FAIL=missing critical fields (no vendor VAT, no amount, no date)
+- Critical fields: vendorVatNumber, documentNumber, documentDate, amountExVat, vatAmount, totalIncVat
+- Minor fields: buyerVatNumber, issuerSignatureOrStamp, buyerAddress
 
 TRANSACTION TYPE RULES:
 - Bill: formal ใบกำกับภาษี with vendor VAT number, has due date or payment terms, unpaid at time of document
@@ -121,6 +149,7 @@ function App() {
   const [sourceTab, setSourceTab] = useState("upload");
   const [duplicateCheck, setDuplicateCheck] = useState(null); // {result, matches, ri}
   const [periodModal, setPeriodModal] = useState(null); // {result, ri, suggestedDates}
+  const [complianceModal, setComplianceModal] = useState(null); // {result, ri, report}
   const [showPeriods, setShowPeriods] = useState(false);
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
   const fileInputRef = useRef();
@@ -357,6 +386,30 @@ function App() {
     wa.forEach(w => { if(w.length > 2 && wb.has(w)) matches++; });
     const score = Math.round((matches / Math.max(wa.size, wb.size)) * 100);
     return score;
+  }
+
+  // ── Thai Tax Invoice Compliance ─────────────────────────────────────
+  function buildComplianceReport(compliance, vendor, docNumber) {
+    if (!compliance) return null;
+    const checks = [
+      { field: "hasThaiTaxInvoiceHeading", label: "ใบกำกับภาษี heading", critical: true },
+      { field: "vendorName", label: "Vendor name", critical: true },
+      { field: "vendorAddress", label: "Vendor address", critical: false },
+      { field: "vendorVatNumber", label: `Vendor VAT number (${compliance.vendorVatNumberValue||"—"})`, critical: true },
+      { field: "vendorVatNumberValid", label: "Vendor VAT number valid (13 digits)", critical: true },
+      { field: "buyerName", label: "Buyer name", critical: true },
+      { field: "buyerAddress", label: "Buyer address", critical: false },
+      { field: "buyerVatNumber", label: `Buyer VAT number (${compliance.buyerVatNumberValue||"not required if not VAT registered"})`, critical: false },
+      { field: "documentNumber", label: "Document number", critical: true },
+      { field: "documentDate", label: "Document date", critical: true },
+      { field: "serviceDescription", label: "Description of goods/services", critical: true },
+      { field: "amountExVat", label: "Amount excluding VAT", critical: true },
+      { field: "vatAmount", label: "VAT amount (7%)", critical: true },
+      { field: "totalIncVat", label: "Total including VAT", critical: true },
+      { field: "vatRate7Percent", label: "VAT rate is 7%", critical: false },
+      { field: "issuerSignatureOrStamp", label: "Issuer signature/stamp", critical: false },
+    ];
+    return { checks, result: compliance.complianceResult, issues: compliance.issues || [] };
   }
 
   // ── Reference Number Helpers ────────────────────────────────────────
@@ -1083,6 +1136,19 @@ function App() {
     setSelectedRows(sel);
     setResults(newResults);
     setStage(STAGES.DONE);
+    // Auto-show compliance for first non-compliant tax invoice
+    const firstNonCompliant = newResults.find(r =>
+      r.extracted?.taxInvoiceCompliance &&
+      r.extracted.taxInvoiceCompliance.complianceResult !== "PASS"
+    );
+    if (firstNonCompliant) {
+      const ri = newResults.indexOf(firstNonCompliant);
+      setComplianceModal({
+        result: firstNonCompliant,
+        ri,
+        report: buildComplianceReport(firstNonCompliant.extracted.taxInvoiceCompliance, firstNonCompliant.extracted.vendor, firstNonCompliant.extracted.taxInvoiceNumber)
+      });
+    }
   }
 
   async function downloadAndProcess() {
@@ -1618,6 +1684,12 @@ function App() {
                         {ex?.documentNumber&&<span style={{fontSize:11,color:"#475569"}}>#{ex.documentNumber}</span>}
                         {ex?.voucherNumber&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(59,130,246,0.1)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:3,color:"#3b82f6"}}>🎫 {ex.voucherNumber}</span>}
                         {ex?.taxInvoiceNumber&&ex.taxInvoiceNumber!==ex.documentNumber&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:3,color:"#f59e0b"}}>TAX INV: {ex.taxInvoiceNumber}</span>}
+                        {ex?.taxInvoiceCompliance&&(()=>{
+                          const r=ex.taxInvoiceCompliance.complianceResult;
+                          const color=r==="PASS"?"#10b981":r==="WARN"?"#f59e0b":"#ef4444";
+                          const icon=r==="PASS"?"✅":r==="WARN"?"⚠️":"❌";
+                          return <button onClick={()=>setComplianceModal({result,ri,report:buildComplianceReport(ex.taxInvoiceCompliance,ex.vendor,ex.taxInvoiceNumber)})} style={{fontSize:10,padding:"1px 7px",background:`rgba(${r==="PASS"?"16,185,129":r==="WARN"?"245,158,11":"239,68,68"},0.1)`,border:`1px solid rgba(${r==="PASS"?"16,185,129":r==="WARN"?"245,158,11":"239,68,68"},0.2)`,borderRadius:3,color,cursor:"pointer",fontFamily:"monospace"}}>{icon} Thai Compliance: {r}</button>;
+                        })()}
                         {(() => { const {refNo,flagMissing} = buildRefNumber(ex,result.file,ex?.transactionType||""); return flagMissing ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:3,color:"#ef4444"}}>⚠️ No voucher no.</span> : refNo ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(22,32,50,0.4)",border:"1px solid #162032",borderRadius:3,color:"#64748b"}}>REF: {refNo}</span> : null; })()}
                         {ex?.documentDate&&<span style={{fontSize:11,color:"#475569"}}>{ex.documentDate}</span>}
                         {result.source==="teams"&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(0,120,212,0.1)",border:"1px solid rgba(0,120,212,0.2)",borderRadius:3,color:"#0078d4"}}>🔷 Teams</span>}
@@ -1770,6 +1842,60 @@ function App() {
             </div>
           </div>
         )}
+
+      {/* ═══ COMPLIANCE MODAL ═══ */}
+      {complianceModal && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.8)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:20}}>
+          <div style={{background:"#0d1b35",border:"1px solid #1e3a5f",borderRadius:14,padding:28,maxWidth:560,width:"100%",maxHeight:"85vh",overflow:"auto",animation:"fadeUp 0.2s ease"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+              <div>
+                <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>THAI TAX INVOICE COMPLIANCE</div>
+                <div style={{fontSize:16,fontWeight:"bold",color:"#f1f5f9"}}>
+                  {complianceModal.report?.result==="PASS"?"✅ COMPLIANT":complianceModal.report?.result==="WARN"?"⚠️ MINOR ISSUES":"❌ NON-COMPLIANT"}
+                </div>
+              </div>
+              <button onClick={()=>setComplianceModal(null)} style={{background:"transparent",border:"none",color:"#475569",cursor:"pointer",fontSize:20}}>✕</button>
+            </div>
+
+            <div style={{fontSize:12,color:"#64748b",marginBottom:16}}>Thai Revenue Code — ใบกำกับภาษี Requirements</div>
+
+            {/* Compliance checklist */}
+            <div style={{marginBottom:20}}>
+              {complianceModal.report?.checks.map((check,i)=>{
+                const compliance = complianceModal.result?.extracted?.taxInvoiceCompliance || {}; const passed = compliance[check.field];
+                const color = passed ? "#10b981" : check.critical ? "#ef4444" : "#f59e0b";
+                const icon = passed ? "✅" : check.critical ? "❌" : "⚠️";
+                return (
+                  <div key={i} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",borderBottom:"1px solid rgba(22,32,50,0.6)",fontSize:12}}>
+                    <span style={{fontSize:14,flexShrink:0}}>{icon}</span>
+                    <span style={{color:passed?"#94a3b8":"#e2e8f0",flex:1}}>{check.label}</span>
+                    {!passed&&check.critical&&<span style={{fontSize:10,padding:"1px 6px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:3,color:"#ef4444"}}>REQUIRED</span>}
+                    {!passed&&!check.critical&&<span style={{fontSize:10,padding:"1px 6px",background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:3,color:"#f59e0b"}}>OPTIONAL</span>}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Issues */}
+            {complianceModal.report?.issues?.length>0&&(
+              <div style={{marginBottom:20,padding:14,background:"rgba(239,68,68,0.05)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:8}}>
+                <div style={{fontSize:11,color:"#ef4444",marginBottom:8,letterSpacing:"0.1em"}}>ISSUES FOUND</div>
+                {complianceModal.report.issues.map((issue,i)=>(
+                  <div key={i} style={{fontSize:12,color:"#94a3b8",marginBottom:4}}>• {issue}</div>
+                ))}
+              </div>
+            )}
+
+            <div style={{fontSize:11,color:"#334155",marginBottom:16,padding:12,background:"rgba(22,32,50,0.3)",borderRadius:6}}>
+              ℹ️ This is for information only. You can still post the transaction regardless of compliance status. Non-compliant documents will be flagged in the email summary.
+            </div>
+
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <button onClick={()=>setComplianceModal(null)} style={{padding:"9px 20px",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:"bold"}}>OK — Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══ PERIOD MODAL ═══ */}
       {periodModal && (
