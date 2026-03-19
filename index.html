@@ -768,37 +768,47 @@ function App() {
         return { value: picked.id, name: picked.name };
       };
 
-      // Fetch all vendors for fuzzy matching
-      const vendorQuery = await qboGet(client, `/query?query=select * from Vendor MAXRESULTS 200`);
-      const allVendors = vendorQuery.QueryResponse?.Vendor || [];
+      // Vendor matching — required for Bills, optional for Expenses
       const extractedVendor = ex.vendor || "";
-
-      // Score all vendors
-      const scored = allVendors.map(v => ({
-        vendor: v,
-        score: vendorSimilarity(extractedVendor, v.DisplayName)
-      })).sort((a,b) => b.score - a.score);
-
-      const bestMatch = scored[0];
       let vendorRef = null;
 
-      if (bestMatch && bestMatch.score >= 95) {
-        // High confidence — use automatically
-        vendorRef = { value: bestMatch.vendor.Id, name: bestMatch.vendor.DisplayName };
-        setPostStatus(s=>({...s,[ri]:{status:"posting", message:`Matched vendor: ${bestMatch.vendor.DisplayName} (${bestMatch.score}%)`}}));
-      } else if (bestMatch && bestMatch.score >= 70) {
-        // Medium confidence — ask user
-        const top3 = scored.slice(0,3).filter(s=>s.score>0);
-        const options = top3.map((s,i) => `${i+1}. "${s.vendor.DisplayName}" (${s.score}% match)`).join("\n");
-        const choice = window.confirm(
-          `Vendor "${extractedVendor}" not found exactly in QBO.\n\nClosest matches:\n${options}\n\nClick OK to use "${bestMatch.vendor.DisplayName}" (${bestMatch.score}% match)\nClick Cancel to create a new vendor instead.`
-        );
-        if (choice) {
+      if (ex.transactionType === "Bill") {
+        // Bills MUST have a vendor — full fuzzy matching required
+        const vendorQuery = await qboGet(client, `/query?query=select * from Vendor MAXRESULTS 200`);
+        const allVendors = vendorQuery.QueryResponse?.Vendor || [];
+        const scored = allVendors.map(v => ({
+          vendor: v,
+          score: vendorSimilarity(extractedVendor, v.DisplayName)
+        })).sort((a,b) => b.score - a.score);
+        const bestMatch = scored[0];
+
+        if (bestMatch && bestMatch.score >= 95) {
           vendorRef = { value: bestMatch.vendor.Id, name: bestMatch.vendor.DisplayName };
+          setPostStatus(s=>({...s,[ri]:{status:"posting", message:`Matched vendor: ${bestMatch.vendor.DisplayName} (${bestMatch.score}%)`}}));
+        } else if (bestMatch && bestMatch.score >= 70) {
+          const top3 = scored.slice(0,3).filter(s=>s.score>0);
+          const options = top3.map((s,i) => `${i+1}. "${s.vendor.DisplayName}" (${s.score}% match)`).join("\n");
+          const choice = window.confirm(
+            `Vendor "${extractedVendor}" not found exactly in QBO.\n\nClosest matches:\n${options}\n\nClick OK to use "${bestMatch.vendor.DisplayName}" (${bestMatch.score}% match)\nClick Cancel to create a new vendor instead.`
+          );
+          if (choice) {
+            vendorRef = { value: bestMatch.vendor.Id, name: bestMatch.vendor.DisplayName };
+          } else {
+            const createNew = window.confirm(`Create new vendor "${extractedVendor}" in QBO?\n\nClick OK to create.\nClick Cancel to abort posting.`);
+            if (!createNew) {
+              setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — vendor not matched"}}));
+              return;
+            }
+            const newVendor = await qboPost(client, "/vendor", { DisplayName: extractedVendor });
+            if (newVendor.Vendor) vendorRef = { value: newVendor.Vendor.Id, name: newVendor.Vendor.DisplayName };
+            else throw new Error("Failed to create vendor");
+          }
         } else {
-          const createNew = window.confirm(`Create new vendor "${extractedVendor}" in QBO?\n\nClick OK to create.\nClick Cancel to abort posting.`);
+          const createNew = window.confirm(
+            `Vendor "${extractedVendor}" was not found in QBO and no close matches exist.\n\nCreate "${extractedVendor}" as a new vendor?\n\nClick OK to create.\nClick Cancel to abort posting.`
+          );
           if (!createNew) {
-            setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — vendor not matched"}}));
+            setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — vendor not found in QBO"}}));
             return;
           }
           const newVendor = await qboPost(client, "/vendor", { DisplayName: extractedVendor });
@@ -806,17 +816,30 @@ function App() {
           else throw new Error("Failed to create vendor");
         }
       } else {
-        // No match — ask to create
-        const createNew = window.confirm(
-          `Vendor "${extractedVendor}" was not found in QBO and no close matches exist.\n\nCreate "${extractedVendor}" as a new vendor?\n\nClick OK to create.\nClick Cancel to abort posting.`
-        );
-        if (!createNew) {
-          setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — vendor not found in QBO"}}));
-          return;
+        // Expenses — vendor is optional for petty cash
+        // Try to match but don't require it — post without vendor if no match
+        if (extractedVendor) {
+          const vendorQuery = await qboGet(client, `/query?query=select * from Vendor MAXRESULTS 200`);
+          const allVendors = vendorQuery.QueryResponse?.Vendor || [];
+          const scored = allVendors.map(v => ({
+            vendor: v,
+            score: vendorSimilarity(extractedVendor, v.DisplayName)
+          })).sort((a,b) => b.score - a.score);
+          const bestMatch = scored[0];
+          if (bestMatch && bestMatch.score >= 95) {
+            // High confidence match — use it
+            vendorRef = { value: bestMatch.vendor.Id, name: bestMatch.vendor.DisplayName };
+          } else if (bestMatch && bestMatch.score >= 70) {
+            // Ask if they want to link to existing vendor
+            const choice = window.confirm(
+              `Possible vendor match found:\n"${bestMatch.vendor.DisplayName}" (${bestMatch.score}% match)\n\nClick OK to link this expense to that vendor.\nClick Cancel to post without a vendor (petty cash style).`
+            );
+            if (choice) vendorRef = { value: bestMatch.vendor.Id, name: bestMatch.vendor.DisplayName };
+            // If cancelled — vendorRef stays null, posts without vendor ✅
+          }
+          // No match or low confidence — post without vendor silently
         }
-        const newVendor = await qboPost(client, "/vendor", { DisplayName: extractedVendor });
-        if (newVendor.Vendor) vendorRef = { value: newVendor.Vendor.Id, name: newVendor.Vendor.DisplayName };
-        else throw new Error("Failed to create vendor");
+        // vendorRef = null means no vendor on the expense — perfectly valid for petty cash
       }
 
       const rawLines = (ex.lines||[{description: ex.transactions?.[0]?.description||"Service", amount: ex.totalAmount||0, accountName: ex.transactions?.[0]?.category||""}]);
@@ -888,7 +911,8 @@ function App() {
         const expBody = {
           PaymentType: "Cash",
           AccountRef: pettyCashAcc ? { value: pettyCashAcc.id, name: pettyCashAcc.name } : { value: "1", name: "Petty Cash" },
-          EntityRef: vendorRef,
+          // EntityRef is optional for petty cash — only include if vendor was matched
+          ...(vendorRef ? { EntityRef: vendorRef } : {}),
           TxnDate: ex.documentDate,
           DocNumber: refNo,
           CustomField: buildCustomFields(client, ex.taxInvoiceNumber||ex.documentNumber),
