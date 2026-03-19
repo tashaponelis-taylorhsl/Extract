@@ -122,7 +122,15 @@ TRANSACTION TYPE RULES:
 - Expense: ใบเสร็จรับเงิน, cash receipts, already paid at point of purchase, petty cash
 - Purchase Order: pre-approval document before goods/services received
 
-Translate ALL Thai text to English. Numbers only (no currency symbols). VAT 7%. WHT extracted separately.`;
+THAI LANGUAGE HANDLING:
+- Translate ALL Thai text to English accurately
+- Thai numbers: ๑=1, ๒=2, ๓=3, ๔=4, ๕=5, ๖=6, ๗=7, ๘=8, ๙=9, ๐=0
+- Common Thai accounting terms: ราคา=price, จำนวน=quantity/amount, รวม=total, ส่วนลด=discount, ภาษี=tax, สินค้า=goods, บริการ=service, วันที่=date, ใบเสร็จ=receipt
+- If a Thai word is unclear, make your best translation and note uncertainty in the notes field
+- Numbers only in amount fields (no currency symbols, no commas)
+- VAT (ภาษีมูลค่าเพิ่ม) = 7%. WHT (ภาษีหัก ณ ที่จ่าย) extracted separately
+- For line items: read each row carefully left to right — description, quantity, unit price, total
+- Do not skip or merge line items — include every line separately`;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function b64url(buf){
@@ -1074,7 +1082,7 @@ function App() {
 
   // ── PDF Processing ──
   async function renderPageToBase64(page) {
-    const viewport = page.getViewport({scale:2.0});
+    const viewport = page.getViewport({scale:3.0}); // Higher scale = better Thai character recognition
     const canvas = document.createElement("canvas");
     canvas.width=viewport.width; canvas.height=viewport.height;
     await page.render({canvasContext:canvas.getContext("2d"),viewport}).promise;
@@ -1135,7 +1143,7 @@ function App() {
   async function analyzeText(text, fileName, systemPrompt) {
     const headers={"Content-Type":"application/json"};
     if(settings.apiKey) headers["x-api-key"]=settings.apiKey;
-    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,system:systemPrompt,messages:[{role:"user",content:`Extract accounting data (file: ${fileName}):\n\n${text.slice(0,12000)}`}]})});
+    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,temperature:0,system:systemPrompt,messages:[{role:"user",content:`Extract accounting data (file: ${fileName}):\n\n${text.slice(0,12000)}`}]})});
     const d=await res.json();
     try{return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim());}catch{return null;}
   }
@@ -1143,7 +1151,7 @@ function App() {
   async function analyzeImages(imageContents, systemPrompt) {
     const headers={"Content-Type":"application/json"};
     if(settings.apiKey) headers["x-api-key"]=settings.apiKey;
-    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,system:systemPrompt,messages:[{role:"user",content:imageContents}]})});
+    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,temperature:0,system:systemPrompt,messages:[{role:"user",content:imageContents}]})});
     const d=await res.json();
     try{return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim());}catch{return null;}
   }
