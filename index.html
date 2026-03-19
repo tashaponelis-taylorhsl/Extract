@@ -127,6 +127,9 @@ THAI LANGUAGE HANDLING:
 - Thai numbers: ๑=1, ๒=2, ๓=3, ๔=4, ๕=5, ๖=6, ๗=7, ๘=8, ๙=9, ๐=0
 - Common Thai accounting terms: ราคา=price, จำนวน=quantity/amount, รวม=total, ส่วนลด=discount, ภาษี=tax, สินค้า=goods, บริการ=service, วันที่=date, ใบเสร็จ=receipt
 - If a Thai word is unclear, make your best translation and note uncertainty in the notes field
+- IMPORTANT: Food ingredients/supplies purchased for business operations (restaurant kitchen, health retreat, hotel) ARE VAT claimable business expenses — NOT entertainment
+- Entertainment = client meals at restaurants, staff parties, gifts to clients — these are NOT VAT claimable
+- Raw materials, food ingredients, kitchen supplies purchased for the business = VAT claimable
 - Numbers only in amount fields (no currency symbols, no commas)
 - VAT (ภาษีมูลค่าเพิ่ม) = 7%. WHT (ภาษีหัก ณ ที่จ่าย) extracted separately
 - For line items: read each row carefully left to right — description, quantity, unit price, total
@@ -422,6 +425,88 @@ function App() {
     return score;
   }
 
+  // ── Thai VAT Handling ────────────────────────────────────────────────
+  function isEntertainmentExpense(description, client) {
+    const keywords = (client?.nonClaimableVat || "entertainment,client entertainment,staff party,client dinner,client lunch,gift,alcohol,wine,beer,เลี้ยงรับรอง,ของขวัญ")
+      .split(",").map(k => k.trim().toLowerCase()).filter(Boolean);
+    const desc = (description || "").toLowerCase();
+    return keywords.some(k => desc.includes(k));
+  }
+
+  function buildVATLines(ex, client, expenseLineRefs) {
+    // Determine if VAT is claimable
+    const hasValidTaxInvoice = !!(ex.taxInvoiceCompliance?.vendorVatNumberValid && ex.taxInvoiceNumber);
+    const hasAnyTaxInvoice = !!(ex.taxInvoiceNumber || ex.taxInvoiceCompliance?.hasThaiTaxInvoiceHeading);
+    const isEntertainment = expenseLineRefs.some(l => isEntertainmentExpense(l.description, client));
+
+    // If entertainment — no VAT claim at all
+    if (isEntertainment || !ex.vatAmount || ex.vatAmount <= 0) return { vatLines: [], vatType: "none" };
+
+    // Determine which VAT account to use
+    const vatAccount = hasAnyTaxInvoice
+      ? (client?.inputTaxConfirmed || "Input Tax - Confirmed")
+      : (client?.inputTaxPending || "Input Tax - Pending");
+
+    const vatType = hasAnyTaxInvoice ? "confirmed" : "pending";
+
+    // Find account in chart
+    const accounts = client?.chartOfAccounts || [];
+    const vatAcc = accounts.find(a => a.name === vatAccount);
+
+    return {
+      vatLines: vatAcc ? [{
+        Amount: Math.abs(ex.vatAmount),
+        DetailType: "AccountBasedExpenseLineDetail",
+        AccountBasedExpenseLineDetail: { AccountRef: { value: vatAcc.id, name: vatAcc.name } },
+        Description: `Input VAT ${ex.vatRate||7}% — ${vatType === "confirmed" ? "Tax Invoice: "+ex.taxInvoiceNumber : "Pending Tax Invoice"}`
+      }] : [],
+      vatType,
+      vatAccount,
+      vatAcc
+    };
+  }
+
+  // Create journal entry to move VAT from Pending to Confirmed
+  async function createVATTransferJournal(client, vatAmount, docDate, reference) {
+    const accounts = client?.chartOfAccounts || [];
+    const confirmedAcc = accounts.find(a => a.name === (client?.inputTaxConfirmed || "Input Tax - Confirmed"));
+    const pendingAcc = accounts.find(a => a.name === (client?.inputTaxPending || "Input Tax - Pending"));
+
+    if (!confirmedAcc || !pendingAcc) {
+      console.warn("VAT transfer accounts not found");
+      return null;
+    }
+
+    const journalBody = {
+      TxnDate: docDate,
+      PrivateNote: `VAT transfer: Pending → Confirmed | Tax Invoice received: ${reference}`,
+      Line: [
+        {
+          JournalEntryLineDetail: {
+            PostingType: "Debit",
+            AccountRef: { value: confirmedAcc.id, name: confirmedAcc.name }
+          },
+          DetailType: "JournalEntryLineDetail",
+          Amount: Math.abs(vatAmount),
+          Description: `Input VAT confirmed — Tax Invoice: ${reference}`
+        },
+        {
+          JournalEntryLineDetail: {
+            PostingType: "Credit",
+            AccountRef: { value: pendingAcc.id, name: pendingAcc.name }
+          },
+          DetailType: "JournalEntryLineDetail",
+          Amount: Math.abs(vatAmount),
+          Description: `Input VAT confirmed — Tax Invoice: ${reference}`
+        }
+      ]
+    };
+
+    const res = await qboPost(client, "/journalentry", journalBody);
+    if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Message || "Journal entry failed");
+    return res.JournalEntry?.Id;
+  }
+
   // ── Thai Tax Invoice Compliance ─────────────────────────────────────
   function buildComplianceReport(compliance, vendor, docNumber) {
     if (!compliance) return null;
@@ -559,7 +644,7 @@ function App() {
           );
 
           if (action) {
-            // Update existing transaction
+            // Update existing transaction + create VAT journal entry if needed
             setPostStatus(s=>({...s,[ri]:{status:"posting", message:"Updating existing transaction..."}}));
             const updateResult = await updateExistingTransaction(
               client, best,
@@ -567,7 +652,22 @@ function App() {
               result.fileData, result.file
             );
             if (updateResult.success) {
-              setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true}}));
+              // If original was posted with pending VAT, create journal to move to confirmed
+              if (ex.vatAmount > 0 && (best.PrivateNote||"").includes("Pending")) {
+                try {
+                  setPostStatus(s=>({...s,[ri]:{status:"posting", message:"Creating VAT transfer journal..."}}));
+                  const journalId = await createVATTransferJournal(
+                    client, ex.vatAmount, ex.documentDate,
+                    ex.taxInvoiceNumber || ex.documentNumber
+                  );
+                  setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true, journalId}}));
+                } catch(e) {
+                  // Still mark as updated even if journal fails
+                  setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true, journalError:e.message}}));
+                }
+              } else {
+                setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true}}));
+              }
             } else {
               setPostStatus(s=>({...s,[ri]:{status:"error", error:"Update failed: "+updateResult.error}}));
             }
@@ -900,20 +1000,27 @@ function App() {
         }
       }
 
+      // Build VAT lines
+      const { vatLines, vatType, vatAccount } = buildVATLines(ex, client, resolvedLines);
+
       if (ex.transactionType === "Bill") {
+        const allLines = [
+          ...resolvedLines.map(l => ({
+            Amount: Math.abs(l.amount) - (vatType !== "none" ? (ex.vatAmount||0) / resolvedLines.length : 0),
+            DetailType: "AccountBasedExpenseLineDetail",
+            AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
+            Description: l.description
+          })),
+          ...vatLines
+        ];
         const billBody = {
           VendorRef: vendorRef,
           TxnDate: ex.documentDate,
           DueDate: ex.dueDate || ex.documentDate,
           DocNumber: refNo || ex.documentNumber,
           CustomField: buildCustomFields(client, ex.taxInvoiceNumber||ex.documentNumber),
-          PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
-          Line: resolvedLines.map(l => ({
-            Amount: Math.abs(l.amount),
-            DetailType: "AccountBasedExpenseLineDetail",
-            AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
-            Description: l.description
-          }))
+          PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | VAT: ${vatType==="confirmed"?"Confirmed ✅":vatType==="pending"?"Pending ⏳":"Not claimed ❌"} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
+          Line: allLines.filter(l => l.Amount > 0)
         };
         const res = await qboPost(client, "/bill", billBody);
         if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Message || "Bill creation failed");
@@ -951,12 +1058,15 @@ function App() {
           DocNumber: refNo,
           CustomField: buildCustomFields(client, ex.taxInvoiceNumber||ex.documentNumber),
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | Voucher: ${ex.voucherNumber||extractVoucherFromFilename(result.file)||""} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
-          Line: resolvedLines.map(l => ({
-            Amount: Math.abs(l.amount),
-            DetailType: "AccountBasedExpenseLineDetail",
-            AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
-            Description: l.description
-          }))
+          Line: [
+            ...resolvedLines.map(l => ({
+              Amount: Math.abs(l.amount) - (vatType !== "none" ? (ex.vatAmount||0) / resolvedLines.length : 0),
+              DetailType: "AccountBasedExpenseLineDetail",
+              AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
+              Description: l.description
+            })),
+            ...vatLines
+          ].filter(l => l.Amount > 0)
         };
         console.log("Posting expense body:", JSON.stringify(expBody));
         const res = await qboPost(client, "/purchase", expBody);
@@ -975,15 +1085,25 @@ function App() {
       // Attach PDF if we have the file data
       if (result.fileData && txId) {
         try {
-          await fetch(`${PROXY}/api/qbo-attach`, {
+          setPostStatus(s=>({...s,[ri]:{status:"posting", message:"Attaching PDF..."}}));
+          const attachRes = await fetch(`${PROXY}/api/qbo-attach`, {
             method:"POST", headers:{"Content-Type":"application/json"},
             body: JSON.stringify({
               token: client.qboToken, realmId: client.qboRealmId,
               fileData: result.fileData, fileName: result.file,
-              entityType: txType, entityId: txId
+              entityType: txType, entityId: txId,
+              env: client.qboEnv || "sandbox"
             })
           });
-        } catch(e) { console.warn("Attachment failed:", e); }
+          const attachData = await attachRes.json();
+          if (attachData.Fault) {
+            console.warn("Attachment API error:", attachData.Fault);
+            logError("PDF Attachment Failed", new Error(attachData.Fault.Error?.[0]?.Message), { clientName: client.name, fileName: result.file });
+          }
+        } catch(e) { 
+          console.warn("Attachment failed:", e);
+          logError("PDF Attachment Failed", e, { clientName: client.name, fileName: result.file });
+        }
       }
 
       // Mark as processed and move to Done folder
@@ -1435,9 +1555,17 @@ function App() {
                     )}
                     {client.qboConnected && client.chartOfAccounts?.length>0 && (
                       <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={async()=>{
-                        const result=await loadChartOfAccounts(client);
-                        const accounts = result.accounts || result;
-                        alert(`✅ Refreshed ${accounts.length} GL accounts${result.cfCount ? " and "+result.cfCount+" custom fields" : ""}`);
+                        try {
+                          const result = await loadChartOfAccounts(client);
+                          const accounts = result.accounts || result;
+                          if (!accounts.length) {
+                            alert("❌ No accounts loaded — your QBO token may have expired. Please click 🔄 Reconnect QBO first.");
+                            return;
+                          }
+                          alert(`✅ Refreshed ${accounts.length} GL accounts${result.cfCount ? " and "+result.cfCount+" custom fields" : ""}`);
+                        } catch(e) {
+                          alert("❌ Failed to refresh GL: " + e.message + "\n\nTry clicking 🔄 Reconnect QBO first.");
+                        }
                       }}>🔄 Refresh GL</button>
                     )}
                     {!client.qboConnected && client.qboClientId && (
@@ -1548,6 +1676,23 @@ function App() {
                     <option value="nightly">Nightly (11pm)</option>
                     <option value="realtime">Real-time (on file upload)</option>
                   </select>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>VAT Tax Code (in QBO)</label>
+                  <input value={editingClient.vatTaxCode||"7.0% S"} onChange={e=>setEditingClient(c=>({...c,vatTaxCode:e.target.value}))} placeholder="7.0% S" style={inputStyle}/>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Input Tax - Confirmed Account</label>
+                  <input value={editingClient.inputTaxConfirmed||"Input Tax - Confirmed"} onChange={e=>setEditingClient(c=>({...c,inputTaxConfirmed:e.target.value}))} placeholder="Input Tax - Confirmed" style={inputStyle}/>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Input Tax - Pending Account</label>
+                  <input value={editingClient.inputTaxPending||"Input Tax - Pending"} onChange={e=>setEditingClient(c=>({...c,inputTaxPending:e.target.value}))} placeholder="Input Tax - Pending" style={inputStyle}/>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Non-Claimable VAT Keywords (comma separated)</label>
+                  <input value={editingClient.nonClaimableVat||"entertainment, client entertainment, staff party, client dinner, client lunch, gift, alcohol, wine, beer, เลี้ยงรับรอง, ของขวัญ"} onChange={e=>setEditingClient(c=>({...c,nonClaimableVat:e.target.value}))} placeholder="entertainment, client dinner, gift, alcohol" style={inputStyle}/>
+                  <div style={{fontSize:10,color:"#334155",marginTop:4}}>Only entertainment-style expenses. Food ingredients/supplies for business operations ARE claimable.</div>
                 </div>
               </div>
             </div>
@@ -1783,7 +1928,9 @@ function App() {
                         {/* Post status */}
                         {ps?.status==="posting"&&<span style={{fontSize:11,color:"#f59e0b"}}>⏳ Posting...</span>}
                         {ps?.status==="posted"&&!ps?.updated&&<span style={{fontSize:11,color:"#10b981"}}>✅ Posted to QBO ({ps.txType} #{ps.qboId})</span>}
-                        {ps?.status==="posted"&&ps?.updated&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated existing QBO transaction #{ps.qboId} — Tax Invoice & PDF added</span>}
+                        {ps?.status==="posted"&&ps?.updated&&!ps?.journalId&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated #{ps.qboId} — Tax Invoice & PDF added</span>}
+                        {ps?.status==="posted"&&ps?.updated&&ps?.journalId&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated #{ps.qboId} — VAT moved to Confirmed (JE #{ps.journalId})</span>}
+                        {ps?.status==="posted"&&ps?.updated&&ps?.journalError&&<span style={{fontSize:11,color:"#f59e0b"}}>🔄 Updated #{ps.qboId} — VAT journal failed: {ps.journalError}</span>}
                         {ps?.status==="error"&&<span style={{fontSize:11,color:"#ef4444"}}>❌ {ps.error}</span>}
                       </div>
 
