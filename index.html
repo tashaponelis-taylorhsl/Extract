@@ -233,7 +233,7 @@ function App() {
   async function qboGet(client, path) {
     const res = await fetch(`${PROXY}/api/qbo`, {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ token: client.qboToken, realmId: client.qboRealmId, method:"GET", path })
+      body: JSON.stringify({ token: client.qboToken, realmId: client.qboRealmId, method:"GET", path, env: client.qboEnv || "sandbox" })
     });
     return res.json();
   }
@@ -241,7 +241,7 @@ function App() {
   async function qboPost(client, path, body) {
     const res = await fetch(`${PROXY}/api/qbo`, {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ token: client.qboToken, realmId: client.qboRealmId, method:"POST", path, body })
+      body: JSON.stringify({ token: client.qboToken, realmId: client.qboRealmId, method:"POST", path, body, env: client.qboEnv || "sandbox" })
     });
     return res.json();
   }
