@@ -59,8 +59,9 @@ Return ONLY this JSON (no markdown):
   "vendorVatNumber": "Thai VAT registration number if present",
   "documentDate": "MM/DD/YYYY",
   "dueDate": "MM/DD/YYYY or null",
-  "documentNumber": "invoice/document number",
+  "documentNumber": "invoice/document number or supplier invoice number",
   "taxInvoiceNumber": "tax invoice number (ใบกำกับภาษี number) if different from documentNumber",
+  "voucherNumber": "petty cash voucher number (PC followed by digits e.g. PC1234) if present in document or filename",
   "currency": "THB|USD|EUR",
   "lines": [{"description":"English description","amount":100.00,"accountName":"exact account name from chart"}],
   "subtotal": 0,
@@ -248,12 +249,35 @@ function App() {
 
   async function loadChartOfAccounts(client) {
     try {
+      // Load Chart of Accounts
       const data = await qboGet(client, `/query?query=select * from Account where Active = true MAXRESULTS 200`);
       const accounts = (data.QueryResponse?.Account || []).map(a => ({ id: a.Id, name: a.Name, type: a.AccountType, subtype: a.AccountSubType }));
-      const updated = clients.map(c => c.id === client.id ? {...c, chartOfAccounts: accounts, coaLoadedAt: new Date().toISOString()} : c);
+
+      // Load custom field definitions by fetching a sample expense with custom fields
+      let customFields = client.customFields || {};
+      try {
+        const expData = await qboGet(client, `/query?query=select * from Purchase MAXRESULTS 1&include=enhancedAllCustomFields`);
+        const sampleExp = expData.QueryResponse?.Purchase?.[0];
+        if (sampleExp?.CustomField) {
+          sampleExp.CustomField.forEach(cf => {
+            if (cf.Name) customFields[cf.Name.toLowerCase()] = { definitionId: cf.DefinitionId, name: cf.Name, type: cf.Type };
+          });
+        }
+        // Also try Bills
+        const billData = await qboGet(client, `/query?query=select * from Bill MAXRESULTS 1&include=enhancedAllCustomFields`);
+        const sampleBill = billData.QueryResponse?.Bill?.[0];
+        if (sampleBill?.CustomField) {
+          sampleBill.CustomField.forEach(cf => {
+            if (cf.Name) customFields[cf.Name.toLowerCase()] = { definitionId: cf.DefinitionId, name: cf.Name, type: cf.Type };
+          });
+        }
+      } catch(e) { console.warn("Custom fields load failed:", e); }
+
+      const updated = clients.map(c => c.id === client.id ? {...c, chartOfAccounts: accounts, customFields, coaLoadedAt: new Date().toISOString()} : c);
       saveClients(updated);
-      return accounts;
-    } catch(e) { console.error("COA load failed:", e); return []; }
+      const cfCount = Object.keys(customFields).length;
+      return { accounts, customFields, cfCount };
+    } catch(e) { console.error("COA load failed:", e); return { accounts: [], customFields: {}, cfCount: 0 }; }
   }
 
   async function checkDuplicates(client, extracted) {
@@ -270,6 +294,57 @@ function App() {
     } catch(e) { return []; }
   }
 
+  // Update existing QBO transaction with tax invoice number and new PDF
+  async function updateExistingTransaction(client, existingTx, taxInvoiceNumber, fileData, fileName) {
+    try {
+      const txType = existingTx._type;
+      const txId = existingTx.Id;
+      const syncToken = existingTx.SyncToken;
+
+      // Build sparse update — only update the PrivateNote/custom field
+      // QBO requires SyncToken for updates
+      let updateBody;
+      if (txType === "Bill") {
+        updateBody = {
+          Id: txId,
+          SyncToken: syncToken,
+          sparse: true,
+          PrivateNote: (existingTx.PrivateNote||"") + ` | Tax Invoice: ${taxInvoiceNumber} (added ${new Date().toLocaleDateString()})`,
+        };
+        const res = await qboPost(client, "/bill", updateBody);
+        if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Message || "Update failed");
+      } else {
+        updateBody = {
+          Id: txId,
+          SyncToken: syncToken,
+          sparse: true,
+          PrivateNote: (existingTx.PrivateNote||"") + ` | Tax Invoice: ${taxInvoiceNumber} (added ${new Date().toLocaleDateString()})`,
+        };
+        const res = await qboPost(client, "/purchase", updateBody);
+        if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Message || "Update failed");
+      }
+
+      // Attach new PDF to existing transaction
+      if (fileData && txId) {
+        try {
+          await fetch(`${PROXY}/api/qbo-attach`, {
+            method:"POST", headers:{"Content-Type":"application/json"},
+            body: JSON.stringify({
+              token: client.qboToken, realmId: client.qboRealmId,
+              fileData, fileName,
+              entityType: txType, entityId: txId,
+              env: client.qboEnv || "sandbox"
+            })
+          });
+        } catch(e) { console.warn("Attachment failed:", e); }
+      }
+
+      return { success: true, txId, txType };
+    } catch(e) {
+      return { success: false, error: e.message };
+    }
+  }
+
   // Fuzzy vendor name matching
   function vendorSimilarity(a, b) {
     const clean = s => s.toLowerCase().replace(/co\.?,?\s*ltd\.?|limited|company|public|co\.|inc\.?|corp\.?|\s+/g," ").replace(/[^a-z0-9 ]/g,"").trim();
@@ -282,6 +357,33 @@ function App() {
     wa.forEach(w => { if(w.length > 2 && wb.has(w)) matches++; });
     const score = Math.round((matches / Math.max(wa.size, wb.size)) * 100);
     return score;
+  }
+
+  // ── Reference Number Helpers ────────────────────────────────────────
+  function extractVoucherFromFilename(fileName) {
+    // Look for PC followed by digits in filename e.g. PC1234, PC-1234, PC_1234
+    const match = (fileName||"").match(/PC[-_]?(\d+)/i);
+    return match ? `PC${match[1]}` : null;
+  }
+
+  function buildRefNumber(extracted, fileName, txType) {
+    // For Expenses (petty cash):
+    // Priority: voucherNumber from doc > voucher from filename > blank
+    // If supplier invoice also present: PC1234/INV123
+    if (txType === "Expense" || txType === "Purchase Order") {
+      const voucher = extracted.voucherNumber || extractVoucherFromFilename(fileName);
+      const supplierInv = extracted.documentNumber;
+      if (voucher && supplierInv && supplierInv !== voucher) {
+        return { refNo: `${voucher}/${supplierInv}`, flagMissing: false };
+      } else if (voucher) {
+        return { refNo: voucher, flagMissing: false };
+      } else {
+        // No voucher found — leave blank and flag
+        return { refNo: "", flagMissing: true };
+      }
+    }
+    // For Bills: use supplier invoice number directly
+    return { refNo: extracted.documentNumber || "", flagMissing: false };
   }
 
   // ── Period Management ───────────────────────────────────────────────
@@ -335,9 +437,61 @@ function App() {
     return { firstOfCurrent, lastOfPrev: lastOfPrevStr };
   }
 
-  // Check if document date is in a closed period and handle accordingly
+  // Check duplicates, then period, then post
   async function checkPeriodAndPost(client, result, ri) {
     const ex = result.extracted;
+
+    // Step 1: Check for duplicates in QBO first
+    if (ex && client.qboConnected) {
+      setPostStatus(s=>({...s,[ri]:{status:"posting", message:"Checking for duplicates..."}}));
+      const matches = await checkDuplicates(client, ex);
+
+      if (matches.length > 0) {
+        const best = matches[0];
+        const confidence = Math.round(
+          (vendorSimilarity(ex.vendor||"", best.VendorRef?.name||best.EntityRef?.name||"") * 0.5) +
+          (Math.abs((ex.totalAmount||0) - (best.TotalAmt||0)) < 1 ? 50 : 0)
+        );
+
+        if (confidence >= 60) {
+          const existingDate = best.TxnDate || "";
+          const existingRef = best.DocNumber || best.Id;
+          const hasTaxInvoice = ex.taxInvoiceNumber && ex.taxInvoiceNumber !== ex.documentNumber;
+
+          const action = window.confirm(
+            `⚠️ POSSIBLE DUPLICATE DETECTED (${confidence}% match)\n\n` +
+            `Existing in QBO:\n` +
+            `${best._type} #${existingRef} — ${best.VendorRef?.name||best.EntityRef?.name||""}\n` +
+            `Amount: ${best.TotalAmt} | Date: ${existingDate}\n\n` +
+            `Current document:\n` +
+            `${ex.transactionType} — ${ex.vendor}\n` +
+            `Amount: ${ex.totalAmount} | Date: ${ex.documentDate}\n` +
+            `${hasTaxInvoice ? "Tax Invoice: "+ex.taxInvoiceNumber : ""}\n\n` +
+            `Click OK to UPDATE existing transaction${hasTaxInvoice ? " with tax invoice number" : " and attach PDF"}.\n` +
+            `Click Cancel to CREATE a new transaction instead.`
+          );
+
+          if (action) {
+            // Update existing transaction
+            setPostStatus(s=>({...s,[ri]:{status:"posting", message:"Updating existing transaction..."}}));
+            const updateResult = await updateExistingTransaction(
+              client, best,
+              ex.taxInvoiceNumber || ex.documentNumber,
+              result.fileData, result.file
+            );
+            if (updateResult.success) {
+              setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true}}));
+            } else {
+              setPostStatus(s=>({...s,[ri]:{status:"error", error:"Update failed: "+updateResult.error}}));
+            }
+            return;
+          }
+          // User chose to create new — fall through to normal posting
+        }
+      }
+    }
+
+    // Step 2: Check period
     const docDate = ex?.documentDate;
     if (!docDate || !client) {
       await postToQBO(client, result, ri);
@@ -380,9 +534,29 @@ function App() {
     saveGLMemory(clientId, memory);
   }
 
-  function suggestGLAccount(clientId, vendor, txType, description, aiSuggestion, availableAccounts) {
+  function suggestGLAccount(clientId, vendor, txType, description, aiSuggestion, availableAccounts, customRules) {
     const memory = getGLMemory(clientId);
     const vendorKey = (vendor||"").toLowerCase().trim();
+    const descLower = (description||"").toLowerCase();
+    const vendorLower = (vendor||"").toLowerCase();
+
+    // 0. Check custom rules first (highest priority)
+    if (customRules) {
+      const lines = customRules.split("\n").filter(l=>l.includes("→")||l.includes("->"));
+      for (const line of lines) {
+        const [keysPart, accountPart] = line.split(/→|->/).map(s=>s.trim());
+        if (!keysPart || !accountPart) continue;
+        const keywords = keysPart.split(",").map(k=>k.trim().toLowerCase());
+        const matches = keywords.some(k => k && (descLower.includes(k) || vendorLower.includes(k)));
+        if (matches) {
+          const exists = availableAccounts.find(a => a.name.toLowerCase() === accountPart.toLowerCase());
+          if (exists) return { account: exists.name, source: "rule", confidence: 100 };
+          // Fuzzy match the rule account name
+          const fuzzy = availableAccounts.map(a=>({name:a.name,score:vendorSimilarity(accountPart,a.name)})).sort((a,b)=>b.score-a.score)[0];
+          if (fuzzy && fuzzy.score >= 70) return { account: fuzzy.name, source: "rule", confidence: 95 };
+        }
+      }
+    }
 
     // 1. Check vendor + txType exact memory (highest confidence)
     if (memory.vendors?.[vendorKey]?.[txType]?.count >= 1) {
@@ -496,37 +670,37 @@ function App() {
 
       const resolveGLAccount = async (aiSuggestedName, description) => {
         const suggestion = suggestGLAccount(
-          client.id, ex.vendor, ex.transactionType, description, aiSuggestedName, expenseAccounts
+          client.id, ex.vendor, ex.transactionType, description, aiSuggestedName, expenseAccounts, client.customRules
         );
 
-        if (suggestion.confidence >= 90) {
-          // High confidence — use automatically
-          const acc = accounts.find(a => a.name === suggestion.account);
-          return acc ? { value: acc.id, name: acc.name } : null;
-        } else if (suggestion.confidence >= 70) {
-          // AI suggestion — confirm with user
-          const confirmed = window.confirm(
-            `GL Account Suggestion:\n\n` +
-            `"${suggestion.account}"\n` +
-            `(${suggestion.source === "ai" ? "AI suggested" : "Partial match"} — ${suggestion.confidence}% confidence)\n\n` +
-            `Click OK to use this account.\nClick Cancel to select a different account.`
-          );
-          if (confirmed) {
-            const acc = accounts.find(a => a.name === suggestion.account);
-            return acc ? { value: acc.id, name: acc.name } : null;
-          }
-        }
+        // Always show confirmation with dropdown — never post silently
+        // Build account list for dropdown
+        const accountOptions = expenseAccounts.map((a,i) => `${i+1}. ${a.name}`).join("\n");
+        const sourceLabel = {
+          "rule": "📋 Custom rule match",
+          "learned": "🧠 Learned from history",
+          "ai": "🤖 AI suggested",
+          "ai_fuzzy": "🤖 AI fuzzy match",
+          "none": "❓ No suggestion"
+        }[suggestion.source] || "🤖 AI suggested";
 
-        // No confidence or user declined — show account picker
-        const accountList = expenseAccounts.map((a,i) => `${i+1}. ${a.name} (${a.type})`).join("\n");
+        const suggestedIndex = suggestion.account 
+          ? expenseAccounts.findIndex(a => a.name === suggestion.account) + 1 
+          : 1;
+
         const selected = window.prompt(
-          `Please select a GL account for:\n"${description}"\n\nAvailable accounts:\n${accountList.slice(0,2000)}\n\nEnter the account NUMBER from the list above:`,
-          "1"
+          `GL Account for: "${description}"\nVendor: ${ex.vendor||"Unknown"}\n\n${sourceLabel}: "${suggestion.account||"None"}"\n(${suggestion.confidence}% confidence)\n\nAvailable accounts:\n${accountOptions.slice(0,3000)}\n\nEnter account NUMBER (suggested: ${suggestedIndex}):`,
+          String(suggestedIndex)
         );
+
         if (!selected) return null;
         const idx = parseInt(selected) - 1;
         const picked = expenseAccounts[idx];
-        return picked ? { value: picked.id, name: picked.name } : null;
+        if (!picked) {
+          alert("Invalid selection. Please enter a number from the list.");
+          return null;
+        }
+        return { value: picked.id, name: picked.name };
       };
 
       // Fetch all vendors for fuzzy matching
@@ -595,12 +769,42 @@ function App() {
 
       let txId, txType;
 
+      // Build CustomField array for QBO using stored field definitions
+  function buildCustomFields(client, taxInvoiceNumber) {
+    const fields = [];
+    if (!taxInvoiceNumber) return fields;
+    const customFields = client?.customFields || {};
+    // Look for "tax invoice" field by various possible names
+    const taxInvField = customFields["tax invoice"] || 
+                        customFields["tax invoice no"] || 
+                        customFields["tax invoice number"] ||
+                        customFields["taxinvoice"] ||
+                        Object.values(customFields).find(f => f.name?.toLowerCase().includes("tax"));
+    if (taxInvField?.definitionId) {
+      fields.push({ DefinitionId: taxInvField.definitionId, StringValue: taxInvoiceNumber });
+    }
+    return fields;
+  }
+
+  // Build reference numbers
+      const { refNo, flagMissing } = buildRefNumber(ex, result.file, ex.transactionType);
+      if (flagMissing) {
+        const proceed = window.confirm(
+          `⚠️ No petty cash voucher number found\n\nFile: ${result.file}\n\nNo PC number was found in the document or filename.\nThe Ref No field will be left blank for manual entry in QBO.\n\nClick OK to post anyway.\nClick Cancel to skip this document.`
+        );
+        if (!proceed) {
+          setPostStatus(s=>({...s,[ri]:{status:"error", error:"Skipped — no voucher number found. Please add manually."}}));
+          return;
+        }
+      }
+
       if (ex.transactionType === "Bill") {
         const billBody = {
           VendorRef: vendorRef,
           TxnDate: ex.documentDate,
           DueDate: ex.dueDate || ex.documentDate,
-          DocNumber: ex.documentNumber,
+          DocNumber: refNo || ex.documentNumber,
+          CustomField: buildCustomFields(client, ex.taxInvoiceNumber||ex.documentNumber),
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
           Line: resolvedLines.map(l => ({
             Amount: Math.abs(l.amount),
@@ -621,8 +825,9 @@ function App() {
           AccountRef: pettyCashAcc ? { value: pettyCashAcc.id, name: pettyCashAcc.name } : { value: "1", name: "Petty Cash" },
           EntityRef: vendorRef,
           TxnDate: ex.documentDate,
-          DocNumber: ex.documentNumber,
-          PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
+          DocNumber: refNo,
+          CustomField: buildCustomFields(client, ex.taxInvoiceNumber||ex.documentNumber),
+          PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | Voucher: ${ex.voucherNumber||extractVoucherFromFilename(result.file)||""} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
           Line: resolvedLines.map(l => ({
             Amount: Math.abs(l.amount),
             DetailType: "AccountBasedExpenseLineDetail",
@@ -1076,14 +1281,16 @@ function App() {
                     {client.qboConnected && !client.chartOfAccounts?.length && (
                       <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={async()=>{
                         const updated=clients.map(c=>c.id===client.id?{...c,_loading:true}:c);setClients(updated);
-                        const accounts=await loadChartOfAccounts(client);
-                        alert(`✅ Loaded ${accounts.length} GL accounts`);
+                        const result=await loadChartOfAccounts(client);
+                        const accounts = result.accounts || result;
+                        alert(`✅ Loaded ${accounts.length} GL accounts${result.cfCount ? " and "+result.cfCount+" custom fields" : ""}`);
                       }}>Load GL Accounts</button>
                     )}
                     {client.qboConnected && client.chartOfAccounts?.length>0 && (
                       <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={async()=>{
-                        const accounts=await loadChartOfAccounts(client);
-                        alert(`✅ Refreshed ${accounts.length} GL accounts`);
+                        const result=await loadChartOfAccounts(client);
+                        const accounts = result.accounts || result;
+                        alert(`✅ Refreshed ${accounts.length} GL accounts${result.cfCount ? " and "+result.cfCount+" custom fields" : ""}`);
                       }}>🔄 Refresh GL</button>
                     )}
                     {!client.qboConnected && client.qboClientId && (
@@ -1161,8 +1368,12 @@ function App() {
                   <input value={editingClient.pettyCashAccount||"Petty Cash"} onChange={e=>setEditingClient(c=>({...c,pettyCashAccount:e.target.value}))} placeholder="Petty Cash" style={inputStyle}/>
                 </div>
                 <div style={{marginBottom:14}}>
-                  <label style={labelStyle}>Custom GL Classification Rules</label>
-                  <textarea value={editingClient.customRules||""} onChange={e=>setEditingClient(c=>({...c,customRules:e.target.value}))} placeholder="e.g. If vendor = Penguin → always use Telephone Expense account" style={{...inputStyle,height:80,resize:"vertical"}}/>
+                  <label style={labelStyle}>Custom GL Rules (one per line)</label>
+                  <div style={{fontSize:10,color:"#334155",marginBottom:6}}>Format: keyword → exact GL account name (e.g. "fuel → Vehicle Expenses")</div>
+                  <textarea value={editingClient.customRules||""} onChange={e=>setEditingClient(c=>({...c,customRules:e.target.value}))} 
+                    placeholder={"fuel, petrol → Vehicle Expenses\noffice, stationery → Office Supplies\nmeal, food → Entertainment\ntaxi, grab → Travel\nphone, mobile → Telephone\nrepair → Repairs & Maintenance"}
+                    style={{...inputStyle,height:140,resize:"vertical",lineHeight:1.8}}/>
+                  <div style={{fontSize:10,color:"#334155",marginTop:4}}>Tip: separate multiple keywords with commas. Vendor names also work e.g. "7-Eleven → Office Supplies"</div>
                 </div>
                 <div style={{marginBottom:14}}>
                   <label style={labelStyle}>QBO Environment</label>
@@ -1405,7 +1616,9 @@ function App() {
                         )}
                         <span style={{fontWeight:"bold",color:"#e2e8f0"}}>{ex?.vendor||result.file}</span>
                         {ex?.documentNumber&&<span style={{fontSize:11,color:"#475569"}}>#{ex.documentNumber}</span>}
+                        {ex?.voucherNumber&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(59,130,246,0.1)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:3,color:"#3b82f6"}}>🎫 {ex.voucherNumber}</span>}
                         {ex?.taxInvoiceNumber&&ex.taxInvoiceNumber!==ex.documentNumber&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:3,color:"#f59e0b"}}>TAX INV: {ex.taxInvoiceNumber}</span>}
+                        {(() => { const {refNo,flagMissing} = buildRefNumber(ex,result.file,ex?.transactionType||""); return flagMissing ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:3,color:"#ef4444"}}>⚠️ No voucher no.</span> : refNo ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(22,32,50,0.4)",border:"1px solid #162032",borderRadius:3,color:"#64748b"}}>REF: {refNo}</span> : null; })()}
                         {ex?.documentDate&&<span style={{fontSize:11,color:"#475569"}}>{ex.documentDate}</span>}
                         {result.source==="teams"&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(0,120,212,0.1)",border:"1px solid rgba(0,120,212,0.2)",borderRadius:3,color:"#0078d4"}}>🔷 Teams</span>}
                         {ex?.transactionTypeReason&&<span style={{fontSize:10,color:"#475569",fontStyle:"italic"}}>({ex.transactionTypeReason})</span>}
@@ -1413,7 +1626,8 @@ function App() {
 
                         {/* Post status */}
                         {ps?.status==="posting"&&<span style={{fontSize:11,color:"#f59e0b"}}>⏳ Posting...</span>}
-                        {ps?.status==="posted"&&<span style={{fontSize:11,color:"#10b981"}}>✅ Posted to QBO ({ps.txType} #{ps.qboId})</span>}
+                        {ps?.status==="posted"&&!ps?.updated&&<span style={{fontSize:11,color:"#10b981"}}>✅ Posted to QBO ({ps.txType} #{ps.qboId})</span>}
+                        {ps?.status==="posted"&&ps?.updated&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated existing QBO transaction #{ps.qboId} — Tax Invoice & PDF added</span>}
                         {ps?.status==="error"&&<span style={{fontSize:11,color:"#ef4444"}}>❌ {ps.error}</span>}
                       </div>
 
