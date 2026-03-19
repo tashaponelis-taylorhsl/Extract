@@ -300,9 +300,21 @@ function App() {
 
   async function loadChartOfAccounts(client) {
     try {
-      // Load Chart of Accounts
-      const data = await qboGet(client, `/query?query=select * from Account where Active = true MAXRESULTS 200`);
-      const accounts = (data.QueryResponse?.Account || []).map(a => ({ id: a.Id, name: a.Name, type: a.AccountType, subtype: a.AccountSubType }));
+      // Load ALL Chart of Accounts in batches of 200
+      let allAccounts = [];
+      let startPosition = 1;
+      let hasMore = true;
+      while (hasMore) {
+        const data = await qboGet(client, `/query?query=select * from Account where Active = true STARTPOSITION ${startPosition} MAXRESULTS 200`);
+        const batch = data.QueryResponse?.Account || [];
+        allAccounts = [...allAccounts, ...batch];
+        if (batch.length < 200) {
+          hasMore = false; // Last batch
+        } else {
+          startPosition += 200; // Fetch next batch
+        }
+      }
+      const accounts = allAccounts.map(a => ({ id: a.Id, name: a.Name, type: a.AccountType, subtype: a.AccountSubType }));
 
       // Load custom field definitions by fetching a sample expense with custom fields
       let customFields = client.customFields || {};
@@ -335,7 +347,7 @@ function App() {
     try {
       const vendor = (extracted.vendor||"").slice(0,20);
       const amount = Math.abs(extracted.totalAmount||0);
-      const query = `/query?query=select * from Bill where TotalAmt = '${amount}' MAXRESULTS 10`;
+      const query = `/query?query=select * from Bill where TotalAmt = '${amount}' MAXRESULTS 20`;
       const data = await qboGet(client, query);
       const bills = data.QueryResponse?.Bill || [];
       const expQuery = `/query?query=select * from Purchase where TotalAmt = '${amount}' MAXRESULTS 10`;
@@ -776,7 +788,7 @@ function App() {
 
       if (ex.transactionType === "Bill") {
         // Bills MUST have a vendor — full fuzzy matching required
-        const vendorQuery = await qboGet(client, `/query?query=select * from Vendor MAXRESULTS 200`);
+        const vendorQuery = await qboGet(client, `/query?query=select * from Vendor MAXRESULTS 500`);
         const allVendors = vendorQuery.QueryResponse?.Vendor || [];
         const scored = allVendors.map(v => ({
           vendor: v,
@@ -821,7 +833,7 @@ function App() {
         // Expenses — vendor is optional for petty cash
         // Try to match but don't require it — post without vendor if no match
         if (extractedVendor) {
-          const vendorQuery = await qboGet(client, `/query?query=select * from Vendor MAXRESULTS 200`);
+          const vendorQuery = await qboGet(client, `/query?query=select * from Vendor MAXRESULTS 500`);
           const allVendors = vendorQuery.QueryResponse?.Vendor || [];
           const scored = allVendors.map(v => ({
             vendor: v,
@@ -911,11 +923,24 @@ function App() {
         // Expense / Purchase
         // Find petty cash account — check client config name first, then search
         const pettyCashName = client.pettyCashAccount || "Petty Cash";
-        const pettyCashAcc = accounts.find(a => a.name.toLowerCase() === pettyCashName.toLowerCase()) ||
-                             accounts.find(a => a.name.toLowerCase().includes("petty")) ||
-                             accounts.find(a => a.name.toLowerCase().includes("cash") && ["Bank","Other Current Asset"].includes(a.type));
+        // Find payment account — exact name match first, then partial match
+        // Search ALL accounts by name — no type restriction whatsoever
+        const normalize = s => s.toLowerCase().trim();
+        const pettyCashAcc = 
+          accounts.find(a => normalize(a.name) === normalize(pettyCashName)) ||
+          accounts.find(a => normalize(a.name).includes(normalize(pettyCashName))) ||
+          accounts.find(a => normalize(pettyCashName).includes(normalize(a.name)) && a.name.length > 3) ||
+          accounts.find(a => normalize(pettyCashName).split(/\s+/).filter(w=>w.length>2).every(w => normalize(a.name).includes(w))) ||
+          accounts.find(a => normalize(a.name).includes("petty")) ||
+          accounts.find(a => normalize(a.name).includes("cash"));
         if (!pettyCashAcc) {
-          throw new Error(`Petty Cash account "${pettyCashName}" not found in Chart of Accounts. Please check client settings.`);
+          // Debug: show what cash-related accounts exist
+          const cashAccounts = accounts.filter(a => 
+            a.name.toLowerCase().includes("cash") || 
+            a.name.toLowerCase().includes("petty") ||
+            a.type?.toLowerCase().includes("cash")
+          );
+          throw new Error(`Payment account "${pettyCashName}" not found.\n\nCash-related accounts found:\n${cashAccounts.map(a=>`• ${a.name} (${a.type})`).join("\n") || "None found"}\n\nPlease update Petty Cash Account Name in client settings.`);
         }
         const expBody = {
           PaymentType: "Cash",
@@ -1109,9 +1134,8 @@ function App() {
     const client = clients.find(c=>c.id===activeClient);
     // Limit COA to expense/liability accounts only to avoid stack overflow with large lists
     const allCoa = client?.chartOfAccounts || [];
-    // Exclude Revenue/Income accounts from AI suggestions (unlikely for expenses)
-    // but keep all others including Fixed Assets, Bank etc.
-    const coa = allCoa.filter(a=>!["Income","Other Income","Revenue"].includes(a.type)).slice(0,60);
+    // Use ALL accounts for AI classification - no filtering
+    const coa = allCoa.slice(0,80);
     const businessType = client?.businessType || "General";
     const wfRules = buildWorkflowRules(client);
     const prompt = SYSTEM_PROMPT(coa, businessType, wfRules);
