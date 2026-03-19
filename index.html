@@ -480,12 +480,20 @@ function App() {
     const accounts = client?.chartOfAccounts || [];
     const vatAcc = accounts.find(a => a.name === vatAccount);
 
+    // Build meaningful VAT line description for reconciliation
+    const voucherRef = ex.voucherNumber || "";
+    const vendorRef2 = ex.vendor || "";
+    const taxInvRef = ex.taxInvoiceNumber ? ` | Tax Inv: ${ex.taxInvoiceNumber}` : "";
+    const vatDesc = vatType === "confirmed"
+      ? `Input VAT ${ex.vatRate||7}% ✅ | ${[voucherRef, vendorRef2].filter(Boolean).join(" | ")}${taxInvRef}`
+      : `Input VAT ${ex.vatRate||7}% ⏳ Pending Tax Invoice | ${[voucherRef, vendorRef2].filter(Boolean).join(" | ")}`;
+
     return {
       vatLines: vatAcc ? [{
         Amount: Math.abs(ex.vatAmount),
         DetailType: "AccountBasedExpenseLineDetail",
         AccountBasedExpenseLineDetail: { AccountRef: { value: vatAcc.id, name: vatAcc.name } },
-        Description: `Input VAT ${ex.vatRate||7}% — ${vatType === "confirmed" ? "Tax Invoice: "+ex.taxInvoiceNumber : "Pending Tax Invoice"}`
+        Description: vatDesc
       }] : [],
       vatType,
       vatAccount,
@@ -1114,6 +1122,8 @@ function App() {
       });
 
       // Attach PDF if we have the file data
+      // QBO Attachable API uses "Purchase" not "Expense" for expense transactions
+      const qboAttachType = txType === "Bill" ? "Bill" : "Purchase";
       if (result.fileData && txId) {
         try {
           setPostStatus(s=>({...s,[ri]:{status:"posting", message:"Attaching PDF..."}}));
@@ -1122,11 +1132,12 @@ function App() {
             body: JSON.stringify({
               token: client.qboToken, realmId: client.qboRealmId,
               fileData: result.fileData, fileName: result.file,
-              entityType: txType, entityId: txId,
+              entityType: qboAttachType, entityId: String(txId),
               env: client.qboEnv || "sandbox"
             })
           });
           const attachData = await attachRes.json();
+          console.log("Attach response:", JSON.stringify(attachData));
           if (attachData.Fault) {
             console.warn("Attachment API error:", attachData.Fault);
             logError("PDF Attachment Failed", new Error(attachData.Fault.Error?.[0]?.Message), { clientName: client.name, fileName: result.file });
