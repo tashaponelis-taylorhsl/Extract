@@ -389,10 +389,13 @@ function App() {
         const res = await qboPost(client, "/bill", updateBody);
         if (res.Fault) throw new Error(res.Fault.Error?.[0]?.Detail || res.Fault.Error?.[0]?.Message || "Update failed");
       } else {
+        // Purchase requires PaymentType and AccountRef even for sparse updates
         const updateBody = {
           Id: txId,
           SyncToken: syncToken,
           sparse: true,
+          PaymentType: fullTx.PaymentType || "Cash",
+          AccountRef: fullTx.AccountRef,
           PrivateNote: updatedNote,
         };
         const res = await qboPost(client, "/purchase", updateBody);
