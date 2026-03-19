@@ -170,7 +170,8 @@ function App() {
   const [duplicateCheck, setDuplicateCheck] = useState(null); // {result, matches, ri}
   const [periodModal, setPeriodModal] = useState(null); // {result, ri, suggestedDates}
   const [complianceModal, setComplianceModal] = useState(null); // {result, ri, report}
-  const [glModal, setGlModal] = useState(null); // {resolve, reject, description, vendor, suggestion, accounts}
+  const [glModal, setGlModal] = useState(null); // {description, vendor, suggestion, accounts}
+  const glResolveRef = useRef(null); // stores resolve callback for GL modal
   const [showPeriods, setShowPeriods] = useState(false);
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
   const fileInputRef = useRef();
@@ -757,8 +758,8 @@ function App() {
         }[suggestion.source] || "🤖 AI suggested";
 
         return new Promise((resolve) => {
+          glResolveRef.current = resolve;
           setGlModal({
-            resolve,
             description,
             vendor: ex.vendor || "",
             suggestion: suggestion.account,
@@ -1397,6 +1398,9 @@ function App() {
                       ? <span style={{padding:"3px 10px",background:"rgba(16,185,129,0.1)",border:"1px solid rgba(16,185,129,0.3)",borderRadius:4,fontSize:10,color:"#10b981"}}>✅ QBO Connected</span>
                       : <span style={{padding:"3px 10px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:4,fontSize:10,color:"#ef4444"}}>⚠ QBO Not Connected</span>
                     }
+                    {client.qboClientId && (
+                      <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px",color:"#0078d4",borderColor:"rgba(0,120,212,0.3)"}} onClick={()=>connectQBO(client)}>🔄 Reconnect QBO</button>
+                    )}
                     {client.qboConnected && !client.chartOfAccounts?.length && (
                       <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={async()=>{
                         const updated=clients.map(c=>c.id===client.id?{...c,_loading:true}:c);setClients(updated);
@@ -1717,6 +1721,9 @@ function App() {
                     {!currentClient?.qboConnected && activeClient && (
                       <button className="btn" style={{...btnPrimary,background:"linear-gradient(135deg,#0078d4,#106ebe)"}} onClick={()=>connectQBO(currentClient)}>🔗 Connect QBO to Post</button>
                     )}
+                    {currentClient?.qboConnected && activeClient && (
+                      <button className="btn" style={{...btnSecondary,fontSize:11}} onClick={()=>connectQBO(currentClient)}>🔄 Reconnect QBO</button>
+                    )}
                   </div>
                 </div>
 
@@ -1915,7 +1922,7 @@ function App() {
                 </div>
                 <button onClick={()=>{
                   const acc = glModal.accounts.find(a=>a.name===glModal.suggestion);
-                  if(acc){glModal.resolve({value:acc.id,name:acc.name});setGlModal(null);}
+                  if(acc){glResolveRef.current?.({value:acc.id,name:acc.name});glResolveRef.current=null;setGlModal(null);}
                 }} style={{padding:"8px 16px",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:"bold",whiteSpace:"nowrap"}}>
                   ✓ Use This
                 </button>
@@ -1941,7 +1948,7 @@ function App() {
                 return (order[a.type]??9) - (order[b.type]??9) || a.name.localeCompare(b.name);
               }).map((acc,i)=>(
                 <div key={acc.id} className="gl-account-item fh" data-name={acc.name.toLowerCase()}
-                  onClick={()=>{glModal.resolve({value:acc.id,name:acc.name});setGlModal(null);}}
+                  onClick={()=>{glResolveRef.current?.({value:acc.id,name:acc.name});glResolveRef.current=null;setGlModal(null);}}
                   style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 14px",borderBottom:"1px solid rgba(22,32,50,0.6)",cursor:"pointer",background:acc.name===glModal.suggestion?"rgba(59,130,246,0.06)":"transparent"}}>
                   <div>
                     <div style={{fontSize:12,color:acc.name===glModal.suggestion?"#3b82f6":"#e2e8f0"}}>{acc.name}</div>
@@ -1953,7 +1960,7 @@ function App() {
             </div>
 
             <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16}}>
-              <button onClick={()=>{glModal.resolve(null);setGlModal(null);}} style={{padding:"9px 18px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:7,color:"#64748b",cursor:"pointer",fontSize:12,fontFamily:"monospace"}}>Cancel — Skip Document</button>
+              <button onClick={()=>{glResolveRef.current?.(null);glResolveRef.current=null;setGlModal(null);}} style={{padding:"9px 18px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:7,color:"#64748b",cursor:"pointer",fontSize:12,fontFamily:"monospace"}}>Cancel — Skip Document</button>
             </div>
           </div>
         </div>
