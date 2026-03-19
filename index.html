@@ -45,6 +45,18 @@ const SYSTEM_PROMPT = (chartOfAccounts, businessType, wfRules) => `You are an ex
 
 Extract ALL financial data. Document may be Thai, English, or mixed.
 
+IMPORTANT — MULTI-PAGE DOCUMENT HANDLING:
+Thai petty cash documents often have multiple pages:
+- Page 1 is typically a SUMMARY SHEET (ใบสรุปค่าใช้จ่าย) — handwritten or typed totals only
+- Page 2+ are the ACTUAL SUPPLIER INVOICES/RECEIPTS with full line item details
+
+ALWAYS prioritize data from the actual supplier invoice/receipt pages (page 2+) over summary pages:
+- Extract LINE ITEMS from the supplier invoice, not from the summary
+- Extract TAX INVOICE details from the supplier invoice page
+- Use VENDOR NAME from the supplier invoice, not the summary
+- The summary page total should match the invoice total — if different, use invoice total
+- Only use summary page data if no supplier invoice page is present
+
 CHART OF ACCOUNTS (use EXACT names from this list for account classification):
 ${chartOfAccounts.map(a => `- ${a.name} (${a.type})`).join('\n')}
 
@@ -1047,12 +1059,14 @@ function App() {
 
   async function processPDF(arrayBuffer, fileName, onStatus) {
     const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
-    const numPages = Math.min(pdf.numPages,5);
+    const numPages = Math.min(pdf.numPages, 8); // Up to 8 pages for petty cash bundles
     onStatus("Extracting text...");
     let text="";
     for(let i=1;i<=numPages;i++){
       const page=await pdf.getPage(i);
       const content=await page.getTextContent();
+      // Label each page so AI knows which is summary vs invoice
+      text+=`\n--- PAGE ${i} OF ${pdf.numPages} ---\n`;
       text+=content.items.map(it=>it.str).join(" ")+"\n";
     }
     const hasText=text.trim().replace(/\s+/g,"").length>80;
@@ -1074,8 +1088,10 @@ function App() {
         const page=await pdf.getPage(i);
         const b64=await renderPageToBase64(page);
         imageContents.push({type:"image",source:{type:"base64",media_type:"image/jpeg",data:b64}});
+        // Add page label between images so AI knows page order
+        imageContents.push({type:"text",text:`[Above image is PAGE ${i} of ${numPages}${i===1?" — likely summary page, prefer data from later pages if supplier invoice present":""}]`});
       }
-      imageContents.push({type:"text",text:`Extract accounting data from this scanned document (file: ${fileName}). May be Thai or English.`});
+      imageContents.push({type:"text",text:`Extract accounting data from this scanned document (file: ${fileName}). May be Thai or English. Prioritize supplier invoice pages over summary pages.`});
       onStatus("AI vision OCR...");
       return await analyzeImages(imageContents, prompt);
     }
