@@ -502,7 +502,7 @@ function App() {
   }
 
   // Create journal entry to move VAT from Pending to Confirmed
-  async function createVATTransferJournal(client, vatAmount, docDate, reference) {
+  async function createVATTransferJournal(client, vatAmount, docDate, reference, extra={}) {
     const accounts = client?.chartOfAccounts || [];
     const confirmedAcc = accounts.find(a => a.name === (client?.inputTaxConfirmed || "Input Tax - Confirmed"));
     const pendingAcc = accounts.find(a => a.name === (client?.inputTaxPending || "Input Tax - Pending"));
@@ -512,9 +512,15 @@ function App() {
       return null;
     }
 
+    // Build description matching the original VAT line format for easy reconciliation
+    const voucherPart = extra?.voucherNumber ? extra.voucherNumber : "";
+    const vendorPart = extra?.vendor ? extra.vendor : "";
+    const taxInvPart = reference ? `| Tax Inv: ${reference}` : "";
+    const journalDesc = `Input VAT 7% ✅ | ${[voucherPart, vendorPart].filter(Boolean).join(" | ")} ${taxInvPart}`.trim();
+
     const journalBody = {
       TxnDate: docDate,
-      PrivateNote: `VAT transfer: Pending → Confirmed | Tax Invoice received: ${reference}`,
+      PrivateNote: `VAT transfer Pending → Confirmed | ${[voucherPart, vendorPart].filter(Boolean).join(" | ")} | Tax Invoice: ${reference}`,
       Line: [
         {
           JournalEntryLineDetail: {
@@ -523,7 +529,7 @@ function App() {
           },
           DetailType: "JournalEntryLineDetail",
           Amount: Math.abs(vatAmount),
-          Description: `Input VAT confirmed — Tax Invoice: ${reference}`
+          Description: journalDesc
         },
         {
           JournalEntryLineDetail: {
@@ -532,7 +538,7 @@ function App() {
           },
           DetailType: "JournalEntryLineDetail",
           Amount: Math.abs(vatAmount),
-          Description: `Input VAT confirmed — Tax Invoice: ${reference}`
+          Description: journalDesc
         }
       ]
     };
@@ -697,7 +703,8 @@ function App() {
                   setPostStatus(s=>({...s,[ri]:{status:"posting", message:"Creating VAT transfer journal..."}}));
                   const journalId = await createVATTransferJournal(
                     client, ex.vatAmount, ex.documentDate,
-                    ex.taxInvoiceNumber || ex.documentNumber
+                    ex.taxInvoiceNumber || ex.documentNumber,
+                    { voucherNumber: ex.voucherNumber, vendor: ex.vendor }
                   );
                   setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true, journalId}}));
                 } catch(e) {
