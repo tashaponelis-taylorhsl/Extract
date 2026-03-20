@@ -111,11 +111,27 @@ Return ONLY this JSON (no markdown):
   }
 }
 
-COMPLIANCE RULES (only fill taxInvoiceCompliance if document contains ใบกำกับภาษี):
+COMPLIANCE RULES — fill taxInvoiceCompliance if document contains ANY of these tax invoice indicators:
+- ใบกำกับภาษี (tax invoice) — in any position on document
+- ใบกำกับภาษีอย่างย่อ (abbreviated tax invoice)
+- ใบเสร็จรับเงิน/ใบกำกับภาษี (receipt/tax invoice combined)
+- ใบกำกับภาษี/ใบเสร็จรับเงิน (tax invoice/receipt — reversed order)
+- ใบเสร็จรับเงิน / ใบกำกับภาษี (with spaces around slash)
+- ใบกำกับภาษี / ใบเสร็จรับเงิน (reversed with spaces)
+- ใบเสร็จรับเงินใบกำกับภาษี (no slash, no space)
+- ใบกำกับภาษีใบเสร็จรับเงิน (reversed, no slash)
+- TAX INVOICE (English, any capitalisation)
+- Tax Invoice, tax invoice (mixed case English)
+- ORIGINAL TAX INVOICE, COPY TAX INVOICE
+
 - vendorVatNumberValid: must be exactly 13 digits
+- hasThaiTaxInvoiceHeading: true ONLY if the document explicitly shows one of the above headings
+- IMPORTANT: A vendor TAX ID alone does NOT make a document a tax invoice — the heading must be present
+- Regular invoices (ใบแจ้งหนี้), quotations (ใบเสนอราคา), delivery notes (ใบส่งของ) may have TAX ID but are NOT tax invoices
 - complianceResult: PASS=all required fields present, WARN=minor issues (missing buyer VAT etc), FAIL=missing critical fields (no vendor VAT, no amount, no date)
 - Critical fields: vendorVatNumber, documentNumber, documentDate, amountExVat, vatAmount, totalIncVat
 - Minor fields: buyerVatNumber, issuerSignatureOrStamp, buyerAddress
+- NOTE: ใบเสร็จรับเงิน/ใบกำกับภาษี combined documents ARE valid tax invoices — treat as PASS if all critical fields present
 
 TRANSACTION TYPE RULES:
 - Bill: formal ใบกำกับภาษี with vendor VAT number, has due date or payment terms, unpaid at time of document
@@ -463,7 +479,12 @@ function App() {
   function buildVATLines(ex, client, expenseLineRefs) {
     // Determine if VAT is claimable
     const hasValidTaxInvoice = !!(ex.taxInvoiceCompliance?.vendorVatNumberValid && ex.taxInvoiceNumber);
-    const hasAnyTaxInvoice = !!(ex.taxInvoiceNumber || ex.taxInvoiceCompliance?.hasThaiTaxInvoiceHeading);
+    // hasAnyTaxInvoice requires explicit tax invoice heading — TAX ID alone is NOT sufficient
+    // A regular invoice or quotation can have a TAX ID without being a valid ใบกำกับภาษี
+    const hasAnyTaxInvoice = !!(
+      ex.taxInvoiceNumber || 
+      ex.taxInvoiceCompliance?.hasThaiTaxInvoiceHeading
+    );
     const isEntertainment = expenseLineRefs.some(l => isEntertainmentExpense(l.description, client));
 
     // If entertainment — no VAT claim at all
