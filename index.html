@@ -41,7 +41,7 @@ const STAGES = { IDLE:"idle", EXTRACTING:"extracting", ANALYZING:"analyzing", DO
 const BUSINESS_TYPES = ["Construction","Trading","Hospitality","Professional Services","Manufacturing","Retail","Non-Profit","Real Estate","Other"];
 const TX_TYPES = ["Bill","Expense","Purchase Order"];
 
-const SYSTEM_PROMPT = (chartOfAccounts, businessType, wfRules) => `You are an expert accounting data extractor for Thai and English documents used in a ${businessType} business in Thailand.
+const SYSTEM_PROMPT = (chartOfAccounts, businessType, wfRules, client) => `You are an expert accounting data extractor for Thai and English documents used in a ${businessType} business in Thailand.
 
 Extract ALL financial data. Document may be Thai, English, or mixed.
 
@@ -1427,7 +1427,7 @@ function App() {
     const coa = allCoa.slice(0,80);
     const businessType = client?.businessType || "General";
     const wfRules = buildWorkflowRules(client);
-    const prompt = SYSTEM_PROMPT(coa, businessType, wfRules);
+    const prompt = SYSTEM_PROMPT(coa, businessType, wfRules, client);
 
     if(hasText){
       onStatus("AI analyzing text...");
