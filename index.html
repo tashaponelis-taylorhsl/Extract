@@ -1016,6 +1016,30 @@ function App() {
     } catch(e) { console.warn("Move to Done failed:", e); }
   }
 
+  // Build CustomField array for QBO — defined at top level to avoid scope issues
+  function buildCustomFields(client, taxInvoiceNumber) {
+    const fields = [];
+    if (!taxInvoiceNumber) return fields;
+    const customFields = client?.customFields || {};
+    // Look for "tax invoice" field by various possible names
+    const taxInvField = customFields["tax invoice"] || 
+                        customFields["tax invoice no"] || 
+                        customFields["tax invoice number"] ||
+                        customFields["taxinvoice"] ||
+                        Object.values(customFields).find(f => f.name?.toLowerCase().includes("tax"));
+    if (taxInvField?.definitionId) {
+      fields.push({ DefinitionId: taxInvField.definitionId, StringValue: taxInvoiceNumber });
+      console.log("Tax Invoice custom field populated:", taxInvField.definitionId, "=", taxInvoiceNumber);
+    } else if (client?.taxInvoiceFieldId) {
+      // Manual override — if admin has set the DefinitionId directly in client settings
+      fields.push({ DefinitionId: client.taxInvoiceFieldId, StringValue: taxInvoiceNumber });
+      console.log("Tax Invoice field (manual ID):", client.taxInvoiceFieldId, "=", taxInvoiceNumber);
+    } else {
+      console.warn("Tax Invoice custom field DefinitionId not found. Go to QBO, fill in Tax Invoice on any transaction, then click Refresh GL.");
+    }
+    return fields;
+  }
+
   async function postToQBO(client, result, ri) {
     setPostStatus(s=>({...s,[ri]:{status:"posting"}}));
     try {
@@ -1178,28 +1202,7 @@ function App() {
 
       let txId, txType;
 
-      // Build CustomField array for QBO using stored field definitions
-  function buildCustomFields(client, taxInvoiceNumber) {
-    const fields = [];
-    if (!taxInvoiceNumber) return fields;
-    const customFields = client?.customFields || {};
-    console.log("buildCustomFields — taxInvoiceNumber:", taxInvoiceNumber, "customFields:", JSON.stringify(customFields));
-    // Look for "tax invoice" field by various possible names
-    const taxInvField = customFields["tax invoice"] || 
-                        customFields["tax invoice no"] || 
-                        customFields["tax invoice number"] ||
-                        customFields["taxinvoice"] ||
-                        Object.values(customFields).find(f => f.name?.toLowerCase().includes("tax"));
-    console.log("taxInvField found:", JSON.stringify(taxInvField));
-    if (taxInvField?.definitionId) {
-      fields.push({ DefinitionId: taxInvField.definitionId, StringValue: taxInvoiceNumber });
-    } else {
-      console.warn("Tax Invoice custom field not found in client.customFields — try refreshing GL accounts");
-    }
-    return fields;
-  }
-
-  // Build reference numbers
+      // Build reference numbers
       const { refNo, flagMissing } = buildRefNumber(ex, result.file, ex.transactionType);
       if (flagMissing) {
         const proceed = window.confirm(
@@ -1922,6 +1925,11 @@ function App() {
                     placeholder="e.g. Health retreat and restaurant in Phuket. Main purchases: food ingredients for kitchen, cleaning supplies, spa products, office stationery, equipment. Staff meals are internal not entertainment."
                     style={{...inputStyle,height:80,resize:"vertical",lineHeight:1.8}}/>
                   <div style={{fontSize:10,color:"#334155",marginTop:4}}>Helps AI correctly categorise expenses for this specific business</div>
+                </div>
+                <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Tax Invoice Custom Field ID (optional)</label>
+                  <input value={editingClient.taxInvoiceFieldId||""} onChange={e=>setEditingClient(c=>({...c,taxInvoiceFieldId:e.target.value}))} placeholder="e.g. 1 (DefinitionId from QBO — leave blank to auto-detect)" style={inputStyle}/>
+                  <div style={{fontSize:10,color:"#334155",marginTop:4}}>Only needed if auto-detect fails. Find in QBO by filling the Tax Invoice field on any transaction then clicking Refresh GL.</div>
                 </div>
                 <div style={{marginBottom:14}}>
                   <label style={labelStyle}>VAT Tax Code (in QBO)</label>
