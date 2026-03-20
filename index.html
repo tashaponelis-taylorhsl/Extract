@@ -167,13 +167,19 @@ COMPLIANCE RULES — fill taxInvoiceCompliance if document contains ANY of these
 - NOTE: ใบเสร็จรับเงิน/ใบกำกับภาษี combined documents ARE valid tax invoices — treat as PASS if all critical fields present
 - VAT on retail receipts: ALWAYS read the actual VAT amount printed on the document — NEVER calculate VAT from the total
 - Thai retail receipts often have a mix of 7% VAT items and 0% VAT items (fresh food, unprocessed items) — the VAT amount shown is already the correct total VAT
-- Look for VAT breakdown table — Thai receipts often show a summary table with columns: รหัส ภพ. | รวมจำนวนชิ้น | มูลค่าภาษี | มูลค่าสินค้า ExVat | ยอดรวม
-- In this table: N=NON VAT row shows zero-rated items, V=VAT row shows 7% items, รวม row shows totals
-- vatAmount = the มูลค่าภาษี (VAT amount) from the รวม/total row — read this EXACTLY as printed
-- subtotal (ex-VAT) = the มูลค่าสินค้า ExVat from the รวม/total row — read this EXACTLY as printed  
-- totalAmount = the ยอดรวม from the รวม/total row
-- NEVER calculate VAT — always read the printed figure
-- NEVER use total × 7/107 — wrong when mixed VAT rates present
+- Thai wholesale receipts (Go Wholesale, Makro, Lotus etc.) show a VAT summary table at the bottom with columns: รหัส ภพ. | รวมจำนวนชิ้น | มูลค่าภาษี | มูลค่าสินค้า ExVat | ยอดรวม
+- In the line items, VAT CODE column shows V=VAT 7% item, N=Non-VAT item
+- The bottom summary table is the authoritative source for totals:
+  N=NON VAT row: zero-rated items total
+  V=VAT row: 7% VAT items — มูลค่าภาษี column = VAT amount, มูลค่าสินค้า ExVat = amount before VAT
+  รวม row: grand totals — USE THESE VALUES
+- vatAmount = มูลค่าภาษี from รวม row (e.g. 28.65)
+- subtotal = มูลค่าสินค้า ExVat from รวม row (e.g. 943.35)  
+- totalAmount = ยอดรวม from รวม row (e.g. 972.00)
+- For line item grouping: group V items together, group N items together by product type
+- NEVER calculate VAT — always read from the summary table
+- NEVER invent amounts — only use figures clearly visible on the document
+- Page 3 is often a bank payment slip (SCB, KBank etc.) — ignore for accounting data, it just confirms payment
 - buyerName/buyerAddress: look in ANY boxed section, table row, or area labeled ชื่อสมาชิก, CustomerName, ผู้ซื้อ, ชื่อ, ที่อยู่ — buyer info is often in a member/customer box in the middle of the receipt
 
 TRANSACTION TYPE RULES:
