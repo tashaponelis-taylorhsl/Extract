@@ -2072,9 +2072,7 @@ function App() {
                         });
                       }}>🚀 Post All to QBO</button>
                     )}
-                    {currentClient?.qboConnected && !ps && !result.extracted && (
-                      <span style={{fontSize:11,color:"#ef4444"}}>⚠️ Extraction failed — re-upload document</span>
-                    )}
+
                     {!currentClient?.qboConnected && activeClient && (
                       <button className="btn" style={{...btnPrimary,background:"linear-gradient(135deg,#0078d4,#106ebe)"}} onClick={()=>connectQBO(currentClient)}>🔗 Connect QBO to Post</button>
                     )}
@@ -2168,7 +2166,7 @@ function App() {
                           </table>
 
                           {/* Individual post button */}
-                          {currentClient?.qboConnected && !ps && result.extracted && (
+                          {currentClient?.qboConnected && !ps && (
                             <div style={{padding:"12px 16px",borderTop:"1px solid #162032",display:"flex",justifyContent:"flex-end",gap:8}}>
                               <button className="btn" style={{...btnGreen,fontSize:11,padding:"7px 16px"}} onClick={()=>checkPeriodAndPost(currentClient,result,ri)}>
                                 🚀 Post {ex.transactionType||"Bill"} to QBO
