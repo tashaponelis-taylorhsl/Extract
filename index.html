@@ -58,14 +58,18 @@ GROUPING RULES:
 - NEVER post individual product lines from retail receipts
 
 AMOUNT RULES:
-- Amount per line = line amount EXCLUDING VAT
-- If VAT inclusive AND all items are 7% VAT: line amount = item group total × 100/107
-- If receipt has mixed VAT rates (some 0%, some 7%): use the subtotal shown on document directly, do not calculate
-- PREFERRED: always use the subtotal (ex-VAT) shown on the document if available
-- Sum of all line amounts (ex-VAT) must equal subtotal exactly
+- Line amounts MUST always be EXCLUDING VAT
+- The sum of ALL line amounts must equal the "subtotal" field exactly (subtotal = total ex-VAT)
+- ALWAYS use the document's stated subtotal (ex-VAT) as the authoritative figure
+- If document shows VAT inclusive line prices: calculate ex-VAT = inclusive price × 100/107
+- If document has mixed VAT rates (V and N items): use the subtotal from the VAT summary table
+- Thai wholesale VAT table: subtotal = มูลค่าสินค้า ExVat from รวม row — use this directly
+- For grouped lines: distribute the subtotal proportionally across groups
+- NEVER let sum of lines differ from subtotal field — adjust if needed
 - NEVER invent or estimate amounts — only use amounts clearly visible on document
-- If amounts unclear → ONE line with full subtotal, description "Goods and Services per invoice"
+- If amounts unclear → ONE line: description "Goods and Services per invoice", amount = subtotal
 - accountName for each line = most appropriate GL account from the chart of accounts provided
+- linesAreIncVat: set to true if original document shows VAT-inclusive line prices (before your conversion)
 
 CRITICAL — MULTI-PAGE DOCUMENT HANDLING:
 Thai petty cash documents often have multiple pages:
@@ -118,6 +122,7 @@ Return ONLY this JSON (no markdown):
   "transactionTypeReason": "brief reason why Bill or Expense",
   "isDuplicate": false,
   "notes": "",
+  "linesAreIncVat": false,
   "taxInvoiceCompliance": {
     "hasThaiTaxInvoiceHeading": true,
     "vendorName": true,
@@ -389,8 +394,8 @@ function App() {
       // Load custom field definitions
       let customFields = client.customFields || {};
       try {
-        // Try fetching from existing Purchase transactions
-        const expData = await qboGet(client, `/query?query=select * from Purchase MAXRESULTS 5&include=enhancedAllCustomFields`);
+        // Try fetching from existing Purchase transactions with enhancedCustomFields
+        const expData = await qboGet(client, `/query?query=select * from Purchase MAXRESULTS 5`);
         const purchases = expData.QueryResponse?.Purchase || [];
         purchases.forEach(tx => {
           (tx.CustomField||[]).forEach(cf => {
@@ -400,7 +405,7 @@ function App() {
           });
         });
         // Also try Bills
-        const billData = await qboGet(client, `/query?query=select * from Bill MAXRESULTS 5&include=enhancedAllCustomFields`);
+        const billData = await qboGet(client, `/query?query=select * from Bill MAXRESULTS 5`);
         const bills = billData.QueryResponse?.Bill || [];
         bills.forEach(tx => {
           (tx.CustomField||[]).forEach(cf => {
@@ -1035,9 +1040,9 @@ function App() {
     const definitionId = manualId || autoId;
     
     if (definitionId) {
-      // Use exact name as stored in QBO — case sensitive
-      const exactName = taxInvField?.name || (client?.taxInvoiceFieldId ? "Tax invoice" : "Tax Invoice");
-      fields.push({ DefinitionId: String(definitionId), Name: exactName, Type: "StringType", StringValue: taxInvoiceNumber });
+      // QBO custom field format — DefinitionId and StringValue only
+      fields.push({ DefinitionId: String(definitionId), StringValue: taxInvoiceNumber });
+      console.log("Sending CustomField:", JSON.stringify({ DefinitionId: String(definitionId), StringValue: taxInvoiceNumber }));
       console.log("Tax Invoice custom field populated:", definitionId, "=", taxInvoiceNumber);
     } else {
       console.warn("Tax Invoice DefinitionId not found. Go to QBO, fill in Tax Invoice on any expense, then click Refresh GL.");
@@ -1223,9 +1228,11 @@ function App() {
       const { vatLines, vatType, vatAccount } = buildVATLines(ex, client, resolvedLines);
 
       if (ex.transactionType === "Bill") {
+        // Line amounts are already ex-VAT — do NOT subtract VAT again
+        // VAT is added as a separate line via vatLines
         const allLines = [
           ...resolvedLines.map(l => ({
-            Amount: Math.abs(l.amount) - (vatType !== "none" ? (ex.vatAmount||0) / resolvedLines.length : 0),
+            Amount: Math.abs(l.amount),
             DetailType: "AccountBasedExpenseLineDetail",
             AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
             Description: l.description
@@ -1277,9 +1284,11 @@ function App() {
           DocNumber: refNo,
           CustomField: buildCustomFields(client, ex.taxInvoiceNumber||null),
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | Voucher: ${ex.voucherNumber||extractVoucherFromFilename(result.file)||""} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
+          // Line amounts are already ex-VAT — do NOT subtract VAT again
+          // VAT is added as a separate line via vatLines
           Line: [
             ...resolvedLines.map(l => ({
-              Amount: Math.abs(l.amount) - (vatType !== "none" ? (ex.vatAmount||0) / resolvedLines.length : 0),
+              Amount: Math.abs(l.amount),
               DetailType: "AccountBasedExpenseLineDetail",
               AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
               Description: l.description
@@ -1336,7 +1345,8 @@ function App() {
         }
       }
 
-      setPostStatus(s=>({...s,[ri]:{status:"posted", qboId: txId, txType}}));
+      const cfPopulated = buildCustomFields(currentClient||client, ex.taxInvoiceNumber||null).length > 0;
+      setPostStatus(s=>({...s,[ri]:{status:"posted", qboId: txId, txType, taxInvField: cfPopulated ? ex.taxInvoiceNumber : null}}));
     } catch(e) {
       logError("QBO Post Failed", e, { clientName: client.name, fileName: result.file, realmId: client.qboRealmId });
       setPostStatus(s=>({...s,[ri]:{status:"error", error: e.message}}));
@@ -1815,6 +1825,73 @@ function App() {
                         }
                       }}>🔄 Refresh GL</button>
                     )}
+                    {client.qboConnected && (
+                      <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px",color:"#f59e0b",borderColor:"rgba(245,158,11,0.3)"}} onClick={async()=>{
+                        try {
+                          // Try multiple ways to find the Tax Invoice custom field DefinitionId
+                          let foundId = null;
+                          let foundName = null;
+
+                          // Method 1: fetch recent purchases
+                          const r1 = await qboGet(client, `/query?query=select * from Purchase MAXRESULTS 20`);
+                          for (const tx of (r1.QueryResponse?.Purchase||[])) {
+                            for (const cf of (tx.CustomField||[])) {
+                              if (cf.DefinitionId && cf.Name) {
+                                foundId = cf.DefinitionId;
+                                foundName = cf.Name;
+                                break;
+                              }
+                            }
+                            if (foundId) break;
+                          }
+
+                          // Method 2: fetch recent bills
+                          if (!foundId) {
+                            const r2 = await qboGet(client, `/query?query=select * from Bill MAXRESULTS 20`);
+                            for (const tx of (r2.QueryResponse?.Bill||[])) {
+                              for (const cf of (tx.CustomField||[])) {
+                                if (cf.DefinitionId && cf.Name) {
+                                  foundId = cf.DefinitionId;
+                                  foundName = cf.Name;
+                                  break;
+                                }
+                              }
+                              if (foundId) break;
+                            }
+                          }
+
+                          // Method 3: check preferences
+                          if (!foundId) {
+                            const r3 = await qboGet(client, `/preferences`);
+                            const prefs = r3.Preferences;
+                            // Check vendor expense custom fields
+                            const vcf = prefs?.VendorAndPurchasesPrefs?.CustomField || [];
+                            for (const cf of vcf) {
+                              if (cf.Name?.toLowerCase().includes("tax") || cf.Name?.toLowerCase().includes("invoice")) {
+                                foundId = cf.DefinitionId || cf.id;
+                                foundName = cf.Name;
+                                break;
+                              }
+                            }
+                          }
+
+                          if (foundId) {
+                            const proceed = confirm(
+                              `✅ Found custom field!\n\nName: "${foundName}"\nDefinitionId: ${foundId}\n\nClick OK to save this as the Tax Invoice Field ID for this client.`
+                            );
+                            if (proceed) {
+                              const updated = clients.map(c => c.id === client.id ? {...c, taxInvoiceFieldId: String(foundId)} : c);
+                              saveClients(updated);
+                              alert(`✅ Saved! Tax Invoice Field ID = ${foundId}`);
+                            }
+                          } else {
+                            alert(`❌ Could not auto-detect the Tax Invoice field ID.\n\nPlease:\n1. Open any expense in QBO\n2. Fill in the Tax Invoice field with any value\n3. Save it\n4. Click this button again`);
+                          }
+                        } catch(e) {
+                          alert("Error: " + e.message);
+                        }
+                      }}>🔍 Find Tax Invoice Field ID</button>
+                    )}
                     {!client.qboConnected && client.qboClientId && (
                       <button className="btn" style={{...btnPrimary,fontSize:10,padding:"6px 12px",background:"linear-gradient(135deg,#0078d4,#106ebe)"}} onClick={()=>connectQBO(client)}>🔗 Connect QBO</button>
                     )}
@@ -2187,7 +2264,7 @@ function App() {
 
                         {/* Post status */}
                         {ps?.status==="posting"&&<span style={{fontSize:11,color:"#f59e0b"}}>⏳ Posting...</span>}
-                        {ps?.status==="posted"&&!ps?.updated&&<span style={{fontSize:11,color:"#10b981"}}>✅ Posted to QBO ({ps.txType} #{ps.qboId})</span>}
+                        {ps?.status==="posted"&&!ps?.updated&&<span style={{fontSize:11,color:"#10b981"}}>✅ Posted to QBO ({ps.txType} #{ps.qboId}){ps.taxInvField ? ` · Tax Inv: ${ps.taxInvField}` : " · ⚠️ No tax inv field"}</span>}
                         {ps?.status==="posted"&&ps?.updated&&!ps?.journalId&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated #{ps.qboId} — Tax Invoice & PDF added</span>}
                         {ps?.status==="posted"&&ps?.updated&&ps?.journalId&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated #{ps.qboId} — VAT moved to Confirmed (JE #{ps.journalId})</span>}
                         {ps?.status==="posted"&&ps?.updated&&ps?.journalError&&<span style={{fontSize:11,color:"#f59e0b"}}>🔄 Updated #{ps.qboId} — VAT journal failed: {ps.journalError}</span>}
@@ -2387,6 +2464,26 @@ function App() {
               )}
             </div>
 
+            {/* Total validation */}
+            {React.createElement(()=>{
+              const lines = lineReviewModal?.lines || [];
+              const lineSum = lines.reduce((s,l)=>s+Math.abs(l.amount||0),0);
+              const vatAmt = lineReviewModal?.vatAmount || 0;
+              const docTotal = lineReviewModal?.total || 0;
+              const expectedSubtotal = docTotal - vatAmt;
+              const diff = Math.abs(lineSum - expectedSubtotal);
+              const grandTotal = lineSum + vatAmt;
+              if (diff > 0.05) {
+                return React.createElement('div', {style:{marginBottom:12,padding:10,background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:6,fontSize:11}},
+                  React.createElement('div', {style:{color:"#f59e0b",fontWeight:"bold",marginBottom:4}}, "⚠️ Line total mismatch"),
+                  React.createElement('div', {style:{color:"#94a3b8"}}, `Lines sum to ฿${lineSum.toFixed(2)} but document subtotal (ex-VAT) should be ฿${expectedSubtotal.toFixed(2)}`),
+                  React.createElement('div', {style:{color:"#94a3b8",marginTop:2}}, "Please check amounts match your document before posting.")
+                );
+              }
+              return React.createElement('div', {style:{marginBottom:12,padding:8,background:"rgba(16,185,129,0.06)",border:"1px solid rgba(16,185,129,0.2)",borderRadius:6,fontSize:11,color:"#10b981"}},
+                `✅ Lines ฿${lineSum.toFixed(2)} + VAT ฿${vatAmt.toFixed(2)} = ฿${grandTotal.toFixed(2)} (document total: ฿${docTotal.toFixed(2)})`
+              );
+            }, null)}
             <div style={{fontSize:11,color:"#334155",marginBottom:16,padding:10,background:"rgba(22,32,50,0.3)",borderRadius:6}}>
               ℹ️ You can edit descriptions above. GL accounts will be confirmed in the next step. Click Post to continue.
             </div>
