@@ -648,6 +648,7 @@ function App() {
   }
 
   function buildRefNumber(extracted, fileName, txType) {
+    if (!extracted) return { refNo: "", flagMissing: false };
     // For Expenses (petty cash):
     // Priority: voucherNumber from doc > voucher from filename > blank
     // If supplier invoice also present: PC1234/INV123
@@ -962,6 +963,13 @@ function App() {
     setPostStatus(s=>({...s,[ri]:{status:"posting"}}));
     try {
       const ex = result.extracted;
+
+      // Guard against null extracted data
+      if (!ex) {
+        setPostStatus(s=>({...s,[ri]:{status:"error", error:"No extracted data — please re-process this document first"}}));
+        return;
+      }
+
       const accounts = client.chartOfAccounts || [];
 
       // GL account resolution with learning
@@ -2064,6 +2072,9 @@ function App() {
                         });
                       }}>🚀 Post All to QBO</button>
                     )}
+                    {currentClient?.qboConnected && !ps && !result.extracted && (
+                      <span style={{fontSize:11,color:"#ef4444"}}>⚠️ Extraction failed — re-upload document</span>
+                    )}
                     {!currentClient?.qboConnected && activeClient && (
                       <button className="btn" style={{...btnPrimary,background:"linear-gradient(135deg,#0078d4,#106ebe)"}} onClick={()=>connectQBO(currentClient)}>🔗 Connect QBO to Post</button>
                     )}
@@ -2090,13 +2101,13 @@ function App() {
                         {ex?.documentNumber&&<span style={{fontSize:11,color:"#475569"}}>#{ex.documentNumber}</span>}
                         {ex?.voucherNumber&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(59,130,246,0.1)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:3,color:"#3b82f6"}}>🎫 {ex.voucherNumber}</span>}
                         {ex?.taxInvoiceNumber&&ex.taxInvoiceNumber!==ex.documentNumber&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:3,color:"#f59e0b"}}>TAX INV: {ex.taxInvoiceNumber}</span>}
-                        {ex?.taxInvoiceCompliance&&(()=>{
+                        {ex?.taxInvoiceCompliance&&ex&&(()=>{
                           const r=ex.taxInvoiceCompliance.complianceResult;
                           const color=r==="PASS"?"#10b981":r==="WARN"?"#f59e0b":"#ef4444";
                           const icon=r==="PASS"?"✅":r==="WARN"?"⚠️":"❌";
                           return <button onClick={()=>setComplianceModal({result,ri,report:buildComplianceReport(ex.taxInvoiceCompliance,ex.vendor,ex.taxInvoiceNumber)})} style={{fontSize:10,padding:"1px 7px",background:`rgba(${r==="PASS"?"16,185,129":r==="WARN"?"245,158,11":"239,68,68"},0.1)`,border:`1px solid rgba(${r==="PASS"?"16,185,129":r==="WARN"?"245,158,11":"239,68,68"},0.2)`,borderRadius:3,color,cursor:"pointer",fontFamily:"monospace"}}>{icon} Thai Compliance: {r}</button>;
                         })()}
-                        {(() => { const {refNo,flagMissing} = buildRefNumber(ex,result.file,ex?.transactionType||""); return flagMissing ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:3,color:"#ef4444"}}>⚠️ No voucher no.</span> : refNo ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(22,32,50,0.4)",border:"1px solid #162032",borderRadius:3,color:"#64748b"}}>REF: {refNo}</span> : null; })()}
+                        {ex && (() => { const {refNo,flagMissing} = buildRefNumber(ex,result.file,ex?.transactionType||""); return flagMissing ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:3,color:"#ef4444"}}>⚠️ No voucher no.</span> : refNo ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(22,32,50,0.4)",border:"1px solid #162032",borderRadius:3,color:"#64748b"}}>REF: {refNo}</span> : null; })()}
                         {ex?.documentDate&&<span style={{fontSize:11,color:"#475569"}}>{ex.documentDate}</span>}
                         {result.source==="teams"&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(0,120,212,0.1)",border:"1px solid rgba(0,120,212,0.2)",borderRadius:3,color:"#0078d4"}}>🔷 Teams</span>}
                         {ex?.transactionTypeReason&&<span style={{fontSize:10,color:"#475569",fontStyle:"italic"}}>({ex.transactionTypeReason})</span>}
@@ -2157,7 +2168,7 @@ function App() {
                           </table>
 
                           {/* Individual post button */}
-                          {currentClient?.qboConnected && !ps && (
+                          {currentClient?.qboConnected && !ps && result.extracted && (
                             <div style={{padding:"12px 16px",borderTop:"1px solid #162032",display:"flex",justifyContent:"flex-end",gap:8}}>
                               <button className="btn" style={{...btnGreen,fontSize:11,padding:"7px 16px"}} onClick={()=>checkPeriodAndPost(currentClient,result,ri)}>
                                 🚀 Post {ex.transactionType||"Bill"} to QBO
@@ -2269,7 +2280,7 @@ function App() {
 
             {/* Line items */}
             <div style={{flex:1,overflow:"auto",border:"1px solid #162032",borderRadius:8,marginBottom:16}}>
-              {(lineReviewModal.lines||[]).map((line,i)=>(
+              {(lineReviewModal?.lines||[]).map((line,i)=>(
                 <div key={i} style={{padding:"12px 16px",borderBottom:"1px solid rgba(22,32,50,0.6)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
                     <div style={{flex:1}}>
@@ -2362,7 +2373,7 @@ function App() {
               style={{width:"100%",padding:"8px 12px",background:"rgba(22,32,50,0.6)",border:"1px solid #1e3a5f",borderRadius:7,color:"#e2e8f0",fontSize:12,fontFamily:"monospace",marginBottom:8}}
             />
             <div style={{flex:1,overflow:"auto",border:"1px solid #162032",borderRadius:8}}>
-              {[...glModal.accounts].sort((a,b)=>{
+              {[...(glModal?.accounts||[])].sort((a,b)=>{
                 const order = {"Expense":0,"Cost of Goods Sold":1,"Bank":2,"Other Current Asset":3,"Fixed Asset":4,"Other Asset":5,"Other Current Liability":6,"Accounts Payable":7,"Other Expense":8};
                 return (order[a.type]??9) - (order[b.type]??9) || a.name.localeCompare(b.name);
               }).map((acc,i)=>(
@@ -2403,8 +2414,8 @@ function App() {
 
             {/* Compliance checklist */}
             <div style={{marginBottom:20}}>
-              {complianceModal.report?.checks.map((check,i)=>{
-                const compliance = complianceModal.result?.extracted?.taxInvoiceCompliance || {}; const passed = compliance[check.field];
+              {(complianceModal.report?.checks||[]).map((check,i)=>{
+                const compliance = complianceModal?.result?.extracted?.taxInvoiceCompliance || {}; const passed = !!(compliance[check.field]);
                 const color = passed ? "#10b981" : check.critical ? "#ef4444" : "#f59e0b";
                 const icon = passed ? "✅" : check.critical ? "❌" : "⚠️";
                 return (
