@@ -1021,21 +1021,26 @@ function App() {
     const fields = [];
     if (!taxInvoiceNumber) return fields;
     const customFields = client?.customFields || {};
-    // Look for "tax invoice" field by various possible names
+    
+    // Look for tax invoice field — check all possible name variations
     const taxInvField = customFields["tax invoice"] || 
                         customFields["tax invoice no"] || 
                         customFields["tax invoice number"] ||
                         customFields["taxinvoice"] ||
                         Object.values(customFields).find(f => f.name?.toLowerCase().includes("tax"));
-    if (taxInvField?.definitionId) {
-      fields.push({ DefinitionId: taxInvField.definitionId, StringValue: taxInvoiceNumber });
-      console.log("Tax Invoice custom field populated:", taxInvField.definitionId, "=", taxInvoiceNumber);
-    } else if (client?.taxInvoiceFieldId) {
-      // Manual override — if admin has set the DefinitionId directly in client settings
-      fields.push({ DefinitionId: client.taxInvoiceFieldId, StringValue: taxInvoiceNumber });
-      console.log("Tax Invoice field (manual ID):", client.taxInvoiceFieldId, "=", taxInvoiceNumber);
+    
+    // Get the best DefinitionId — prefer manual override, then auto-detected
+    const manualId = client?.taxInvoiceFieldId?.trim();
+    const autoId = taxInvField?.definitionId;
+    const definitionId = manualId || autoId;
+    
+    if (definitionId) {
+      // Use exact name as stored in QBO — case sensitive
+      const exactName = taxInvField?.name || (client?.taxInvoiceFieldId ? "Tax invoice" : "Tax Invoice");
+      fields.push({ DefinitionId: String(definitionId), Name: exactName, Type: "StringType", StringValue: taxInvoiceNumber });
+      console.log("Tax Invoice custom field populated:", definitionId, "=", taxInvoiceNumber);
     } else {
-      console.warn("Tax Invoice custom field DefinitionId not found. Go to QBO, fill in Tax Invoice on any transaction, then click Refresh GL.");
+      console.warn("Tax Invoice DefinitionId not found. Go to QBO, fill in Tax Invoice on any expense, then click Refresh GL.");
     }
     return fields;
   }
@@ -1232,7 +1237,7 @@ function App() {
           TxnDate: ex.documentDate,
           DueDate: ex.dueDate || ex.documentDate,
           DocNumber: refNo || ex.documentNumber,
-          CustomField: buildCustomFields(client, ex.taxInvoiceNumber||ex.documentNumber),
+          CustomField: buildCustomFields(client, ex.taxInvoiceNumber||null),
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | VAT: ${vatType==="confirmed"?"Confirmed ✅":vatType==="pending"?"Pending ⏳":"Not claimed ❌"} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
           Line: allLines.filter(l => l.Amount > 0)
         };
@@ -1270,7 +1275,7 @@ function App() {
           ...(vendorRef ? { EntityRef: vendorRef } : {}),
           TxnDate: ex.documentDate,
           DocNumber: refNo,
-          CustomField: buildCustomFields(client, ex.taxInvoiceNumber||ex.documentNumber),
+          CustomField: buildCustomFields(client, ex.taxInvoiceNumber||null),
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | Voucher: ${ex.voucherNumber||extractVoucherFromFilename(result.file)||""} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
           Line: [
             ...resolvedLines.map(l => ({
