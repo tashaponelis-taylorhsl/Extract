@@ -59,7 +59,9 @@ GROUPING RULES:
 
 AMOUNT RULES:
 - Amount per line = line amount EXCLUDING VAT
-- If VAT inclusive: line amount = item group total × 100/107
+- If VAT inclusive AND all items are 7% VAT: line amount = item group total × 100/107
+- If receipt has mixed VAT rates (some 0%, some 7%): use the subtotal shown on document directly, do not calculate
+- PREFERRED: always use the subtotal (ex-VAT) shown on the document if available
 - Sum of all line amounts (ex-VAT) must equal subtotal exactly
 - NEVER invent or estimate amounts — only use amounts clearly visible on document
 - If amounts unclear → ONE line with full subtotal, description "Goods and Services per invoice"
@@ -163,8 +165,15 @@ COMPLIANCE RULES — fill taxInvoiceCompliance if document contains ANY of these
 - Critical fields: vendorVatNumber, documentNumber, documentDate, amountExVat, vatAmount, totalIncVat
 - Minor fields: buyerVatNumber, issuerSignatureOrStamp, buyerAddress
 - NOTE: ใบเสร็จรับเงิน/ใบกำกับภาษี combined documents ARE valid tax invoices — treat as PASS if all critical fields present
-- VAT on retail receipts: if total is VAT inclusive and no separate VAT line shown, calculate vatAmount = total × 7/107, amountExVat = total × 100/107. Set vatAmount and amountExVat accordingly.
-- Thai retail receipts often say "รวมภาษีมูลค่าเพิ่ม 7%" or show VAT amount at bottom — look carefully for this
+- VAT on retail receipts: ALWAYS read the actual VAT amount printed on the document — NEVER calculate VAT from the total
+- Thai retail receipts often have a mix of 7% VAT items and 0% VAT items (fresh food, unprocessed items) — the VAT amount shown is already the correct total VAT
+- Look for VAT breakdown table — Thai receipts often show a summary table with columns: รหัส ภพ. | รวมจำนวนชิ้น | มูลค่าภาษี | มูลค่าสินค้า ExVat | ยอดรวม
+- In this table: N=NON VAT row shows zero-rated items, V=VAT row shows 7% items, รวม row shows totals
+- vatAmount = the มูลค่าภาษี (VAT amount) from the รวม/total row — read this EXACTLY as printed
+- subtotal (ex-VAT) = the มูลค่าสินค้า ExVat from the รวม/total row — read this EXACTLY as printed  
+- totalAmount = the ยอดรวม from the รวม/total row
+- NEVER calculate VAT — always read the printed figure
+- NEVER use total × 7/107 — wrong when mixed VAT rates present
 - buyerName/buyerAddress: look in ANY boxed section, table row, or area labeled ชื่อสมาชิก, CustomerName, ผู้ซื้อ, ชื่อ, ที่อยู่ — buyer info is often in a member/customer box in the middle of the receipt
 
 TRANSACTION TYPE RULES:
@@ -545,6 +554,8 @@ function App() {
       ? `Input VAT ${ex.vatRate||7}% ✅ | ${[voucherRef, vendorRef2].filter(Boolean).join(" | ")}${taxInvRef}`
       : `Input VAT ${ex.vatRate||7}% ⏳ Pending Tax Invoice | ${[voucherRef, vendorRef2].filter(Boolean).join(" | ")}`;
 
+    // Always use the exact VAT amount from the document — never recalculate
+    // Some items may be 0% VAT (fresh food) so total × 7/107 would be wrong
     return {
       vatLines: vatAcc ? [{
         Amount: Math.abs(ex.vatAmount),
@@ -1062,17 +1073,22 @@ function App() {
       const rawLines = (ex.lines||[{description: ex.transactions?.[0]?.description||"Service", amount: ex.totalAmount||0, accountName: ex.transactions?.[0]?.category||""}]);
 
       // Show line review modal before posting — let user verify groupings
-      const { vatLines: previewVatLines, vatType: previewVatType } = buildVATLines(ex, client, rawLines);
+      let previewVatType = "none";
+      try {
+        const vatPreview = buildVATLines(ex, client, rawLines);
+        previewVatType = vatPreview.vatType;
+      } catch(e) { console.warn("VAT preview failed:", e); }
+
       const approvedLines = await new Promise((resolve) => {
         lineReviewResolveRef.current = resolve;
         setLineReviewModal({
-          lines: rawLines,
+          lines: rawLines.map(l => ({...l})), // clone to allow editing
           vendor: ex.vendor || "Unknown vendor",
-          total: ex.totalAmount,
-          vatAmount: ex.vatAmount,
+          total: ex.totalAmount || 0,
+          vatAmount: ex.vatAmount || 0,
           vatType: previewVatType,
-          docNumber: ex.documentNumber,
-          voucherNumber: ex.voucherNumber,
+          docNumber: ex.documentNumber || "",
+          voucherNumber: ex.voucherNumber || "",
         });
       });
 
@@ -1486,18 +1502,21 @@ function App() {
     setResults(newResults);
     setStage(STAGES.DONE);
     // Auto-show compliance for first non-compliant tax invoice
-    const firstNonCompliant = newResults.find(r =>
-      r.extracted?.taxInvoiceCompliance &&
-      r.extracted.taxInvoiceCompliance.complianceResult !== "PASS"
-    );
-    if (firstNonCompliant) {
-      const ri = newResults.indexOf(firstNonCompliant);
-      setComplianceModal({
-        result: firstNonCompliant,
-        ri,
-        report: buildComplianceReport(firstNonCompliant.extracted.taxInvoiceCompliance, firstNonCompliant.extracted.vendor, firstNonCompliant.extracted.taxInvoiceNumber)
-      });
-    }
+    try {
+      const firstNonCompliant = newResults.find(r =>
+        r.extracted?.taxInvoiceCompliance &&
+        r.extracted.taxInvoiceCompliance.complianceResult !== "PASS"
+      );
+      if (firstNonCompliant) {
+        const ri = newResults.indexOf(firstNonCompliant);
+        const report = buildComplianceReport(
+          firstNonCompliant.extracted.taxInvoiceCompliance, 
+          firstNonCompliant.extracted?.vendor, 
+          firstNonCompliant.extracted?.taxInvoiceNumber
+        );
+        if (report) setComplianceModal({ result: firstNonCompliant, ri, report });
+      }
+    } catch(e) { console.warn("Compliance modal error:", e); }
   }
 
   async function downloadAndProcess() {
@@ -2250,7 +2269,7 @@ function App() {
 
             {/* Line items */}
             <div style={{flex:1,overflow:"auto",border:"1px solid #162032",borderRadius:8,marginBottom:16}}>
-              {lineReviewModal.lines.map((line,i)=>(
+              {(lineReviewModal.lines||[]).map((line,i)=>(
                 <div key={i} style={{padding:"12px 16px",borderBottom:"1px solid rgba(22,32,50,0.6)"}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
                     <div style={{flex:1}}>
