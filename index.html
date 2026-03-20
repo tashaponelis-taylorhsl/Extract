@@ -104,7 +104,7 @@ Return ONLY this JSON (no markdown):
   "documentDate": "MM/DD/YYYY",
   "dueDate": "MM/DD/YYYY or null",
   "documentNumber": "invoice/document number or supplier invoice number",
-  "taxInvoiceNumber": "tax invoice number (ใบกำกับภาษี number) if different from documentNumber",
+  "taxInvoiceNumber": "tax invoice number — for combined ใบเสร็จรับเงิน/ใบกำกับภาษี documents use the receipt number (เลขที่ใบเสร็จ/Receipt No.) as this IS the tax invoice number. Look for fields labeled: เลขที่ใบเสร็จ, Receipt No., เลขที่ใบกำกับภาษี, Tax Invoice No.",
   "voucherNumber": "petty cash voucher number (PC followed by digits e.g. PC1234) if present in document or filename",
   "currency": "THB|USD|EUR",
   "lines": [
@@ -471,15 +471,44 @@ function App() {
 
   async function checkDuplicates(client, extracted) {
     try {
-      const vendor = (extracted.vendor||"").slice(0,20);
       const amount = Math.abs(extracted.totalAmount||0);
-      const query = `/query?query=select * from Bill where TotalAmt = '${amount}' MAXRESULTS 20`;
-      const data = await qboGet(client, query);
-      const bills = data.QueryResponse?.Bill || [];
-      const expQuery = `/query?query=select * from Purchase where TotalAmt = '${amount}' MAXRESULTS 10`;
-      const expData = await qboGet(client, expQuery);
-      const expenses = expData.QueryResponse?.Purchase || [];
-      return [...bills.map(b=>({...b,_type:"Bill"})), ...expenses.map(e=>({...e,_type:"Expense"}))];
+      // Search with ฿5 tolerance — catches rounding differences between invoice and tax invoice
+      const tolerance = 5;
+      const minAmt = (amount - tolerance).toFixed(2);
+      const maxAmt = (amount + tolerance).toFixed(2);
+
+      // QBO doesn't support range queries easily so fetch by exact amount first
+      // then also fetch recent transactions for vendor matching
+      const billQuery = `/query?query=select * from Bill where TotalAmt = '${amount}' MAXRESULTS 20`;
+      const expQuery = `/query?query=select * from Purchase where TotalAmt = '${amount}' MAXRESULTS 20`;
+
+      const [billData, expData] = await Promise.all([
+        qboGet(client, billQuery),
+        qboGet(client, expQuery)
+      ]);
+
+      let bills = (billData.QueryResponse?.Bill || []).map(b=>({...b,_type:"Bill"}));
+      let expenses = (expData.QueryResponse?.Purchase || []).map(e=>({...e,_type:"Expense"}));
+
+      // If no exact match, try fetching recent transactions and filter by vendor+approximate amount
+      if (bills.length === 0 && expenses.length === 0 && extracted.vendor) {
+        const vendorName = (extracted.vendor||"").slice(0,30).replace(/'/g,"");
+        const recentExp = await qboGet(client, `/query?query=select * from Purchase ORDERBY MetaData.LastUpdatedTime DESC MAXRESULTS 50`);
+        const recentBill = await qboGet(client, `/query?query=select * from Bill ORDERBY MetaData.LastUpdatedTime DESC MAXRESULTS 50`);
+        
+        // Filter by amount within tolerance
+        const matchExp = (recentExp.QueryResponse?.Purchase||[])
+          .filter(tx => Math.abs((tx.TotalAmt||0) - amount) <= tolerance)
+          .map(e=>({...e,_type:"Expense"}));
+        const matchBill = (recentBill.QueryResponse?.Bill||[])
+          .filter(tx => Math.abs((tx.TotalAmt||0) - amount) <= tolerance)
+          .map(b=>({...b,_type:"Bill"}));
+        
+        bills = matchBill;
+        expenses = matchExp;
+      }
+
+      return [...bills, ...expenses];
     } catch(e) { return []; }
   }
 
@@ -797,21 +826,32 @@ function App() {
           (Math.abs((ex.totalAmount||0) - (best.TotalAmt||0)) < 1 ? 50 : 0)
         );
 
-        if (confidence >= 60) {
+        // Use wider tolerance — ฿5 rounding difference still counts as duplicate
+        const amountTolerance = 5;
+        const recalcConfidence = Math.round(
+          (vendorSimilarity(ex.vendor||"", best.VendorRef?.name||best.EntityRef?.name||"") * 0.6) +
+          (Math.abs((ex.totalAmount||0) - (best.TotalAmt||0)) <= amountTolerance ? 40 : 
+           Math.abs((ex.totalAmount||0) - (best.TotalAmt||0)) <= 20 ? 20 : 0)
+        );
+        const effectiveConfidence = Math.max(confidence, recalcConfidence);
+
+        if (effectiveConfidence >= 50) {
           const existingDate = best.TxnDate || "";
           const existingRef = best.DocNumber || best.Id;
           const hasTaxInvoice = ex.taxInvoiceNumber && ex.taxInvoiceNumber !== ex.documentNumber;
+          const amountDiff = Math.abs((ex.totalAmount||0) - (best.TotalAmt||0));
 
           const action = window.confirm(
-            `⚠️ POSSIBLE DUPLICATE DETECTED (${confidence}% match)\n\n` +
+            `⚠️ POSSIBLE DUPLICATE DETECTED (${effectiveConfidence}% match)\n\n` +
             `Existing in QBO:\n` +
             `${best._type} #${existingRef} — ${best.VendorRef?.name||best.EntityRef?.name||""}\n` +
-            `Amount: ${best.TotalAmt} | Date: ${existingDate}\n\n` +
+            `Amount: ฿${best.TotalAmt} | Date: ${existingDate}\n\n` +
             `Current document:\n` +
             `${ex.transactionType} — ${ex.vendor}\n` +
-            `Amount: ${ex.totalAmount} | Date: ${ex.documentDate}\n` +
-            `${hasTaxInvoice ? "Tax Invoice: "+ex.taxInvoiceNumber : ""}\n\n` +
-            `Click OK to UPDATE existing transaction${hasTaxInvoice ? " with tax invoice number" : " and attach PDF"}.\n` +
+            `Amount: ฿${ex.totalAmount} | Date: ${ex.documentDate}\n` +
+            `${amountDiff > 0 ? "⚠️ Amount difference: ฿"+amountDiff.toFixed(2)+" (rounding?)\n" : ""}` +
+            `${hasTaxInvoice ? "Tax Invoice: "+ex.taxInvoiceNumber+"\n" : ""}\n` +
+            `Click OK to UPDATE existing transaction${hasTaxInvoice ? " — adds tax invoice number & PDF" : " — attaches PDF"}.\n` +
             `Click Cancel to CREATE a new transaction instead.`
           );
 
