@@ -1040,10 +1040,15 @@ function App() {
     const definitionId = manualId || autoId;
     
     if (definitionId) {
-      // QBO custom field format — DefinitionId and StringValue only
-      fields.push({ DefinitionId: String(definitionId), StringValue: taxInvoiceNumber });
-      console.log("Sending CustomField:", JSON.stringify({ DefinitionId: String(definitionId), StringValue: taxInvoiceNumber }));
-      console.log("Tax Invoice custom field populated:", definitionId, "=", taxInvoiceNumber);
+      // QBO requires Name and Type alongside DefinitionId and StringValue
+      const cfEntry = {
+        DefinitionId: String(definitionId),
+        Name: taxInvField?.name || "Tax invoice",
+        Type: "StringType",
+        StringValue: taxInvoiceNumber
+      };
+      fields.push(cfEntry);
+      console.log("Sending CustomField:", JSON.stringify(cfEntry));
     } else {
       console.warn("Tax Invoice DefinitionId not found. Go to QBO, fill in Tax Invoice on any expense, then click Refresh GL.");
     }
