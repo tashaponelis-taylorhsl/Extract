@@ -125,13 +125,18 @@ COMPLIANCE RULES — fill taxInvoiceCompliance if document contains ANY of these
 - ORIGINAL TAX INVOICE, COPY TAX INVOICE
 
 - vendorVatNumberValid: must be exactly 13 digits
-- hasThaiTaxInvoiceHeading: true ONLY if the document explicitly shows one of the above headings
-- IMPORTANT: A vendor TAX ID alone does NOT make a document a tax invoice — the heading must be present
-- Regular invoices (ใบแจ้งหนี้), quotations (ใบเสนอราคา), delivery notes (ใบส่งของ) may have TAX ID but are NOT tax invoices
+- hasThaiTaxInvoiceHeading: true if ANY of the above tax invoice words appear ANYWHERE on the document — in the header, footer, middle of page, inline text, or stamp. Position does not matter.
+- IMPORTANT: A vendor TAX ID alone does NOT make a document a tax invoice — one of the tax invoice words must also be present somewhere on the document
+- Regular invoices (ใบแจ้งหนี้), quotations (ใบเสนอราคา), delivery notes (ใบส่งของ) may have TAX ID but are NOT tax invoices unless ใบกำกับภาษี also appears
+- Thai retailers commonly print ใบเสร็จรับเงิน/ใบกำกับภาษี in the MIDDLE of the receipt — this is still a valid tax invoice heading
+- Look carefully through the ENTIRE document for these words — do not only check the top header area
 - complianceResult: PASS=all required fields present, WARN=minor issues (missing buyer VAT etc), FAIL=missing critical fields (no vendor VAT, no amount, no date)
 - Critical fields: vendorVatNumber, documentNumber, documentDate, amountExVat, vatAmount, totalIncVat
 - Minor fields: buyerVatNumber, issuerSignatureOrStamp, buyerAddress
 - NOTE: ใบเสร็จรับเงิน/ใบกำกับภาษี combined documents ARE valid tax invoices — treat as PASS if all critical fields present
+- VAT on retail receipts: if total is VAT inclusive and no separate VAT line shown, calculate vatAmount = total × 7/107, amountExVat = total × 100/107. Set vatAmount and amountExVat accordingly.
+- Thai retail receipts often say "รวมภาษีมูลค่าเพิ่ม 7%" or show VAT amount at bottom — look carefully for this
+- buyerName/buyerAddress: look in ANY boxed section, table row, or area labeled ชื่อสมาชิก, CustomerName, ผู้ซื้อ, ชื่อ, ที่อยู่ — buyer info is often in a member/customer box in the middle of the receipt
 
 TRANSACTION TYPE RULES:
 - Bill: formal ใบกำกับภาษี with vendor VAT number, has due date or payment terms, unpaid at time of document
