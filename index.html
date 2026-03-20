@@ -1510,7 +1510,7 @@ function App() {
 
   // ── PDF Processing ──
   async function renderPageToBase64(page) {
-    const viewport = page.getViewport({scale:4.0}); // Higher scale = better Thai character recognition
+    const viewport = page.getViewport({scale:3.0}); // 3x scale — good quality without hitting API limits
     const canvas = document.createElement("canvas");
     canvas.width=viewport.width; canvas.height=viewport.height;
     const ctx = canvas.getContext("2d");
@@ -1527,7 +1527,7 @@ function App() {
       data[i] = data[i+1] = data[i+2] = contrast;
     }
     ctx.putImageData(imageData, 0, 0);
-    return canvas.toDataURL("image/jpeg",0.95).split(",")[1];
+    return canvas.toDataURL("image/jpeg",0.85).split(",")[1]; // 0.85 quality reduces size while keeping readability
   }
 
   async function processPDF(arrayBuffer, fileName, onStatus) {
@@ -1594,7 +1594,7 @@ function App() {
   async function analyzeText(text, fileName, systemPrompt) {
     const headers={"Content-Type":"application/json"};
     if(settings.apiKey) headers["x-api-key"]=settings.apiKey;
-    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,temperature:0,system:systemPrompt,messages:[{role:"user",content:`Extract accounting data (file: ${fileName}):\n\n${text.slice(0,12000)}`}]})});
+    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,temperature:0,system:systemPrompt,messages:[{role:"user",content:`Extract accounting data (file: ${fileName}):\n\n${text.slice(0,12000)}`}]})});
     const d=await res.json();
     try{return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim());}catch{return null;}
   }
@@ -1602,7 +1602,7 @@ function App() {
   async function analyzeImages(imageContents, systemPrompt) {
     const headers={"Content-Type":"application/json"};
     if(settings.apiKey) headers["x-api-key"]=settings.apiKey;
-    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,temperature:0,system:systemPrompt,messages:[{role:"user",content:imageContents}]})});
+    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,temperature:0,system:systemPrompt,messages:[{role:"user",content:imageContents}]})});
     const d=await res.json();
     try{return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim());}catch{return null;}
   }
