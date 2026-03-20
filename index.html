@@ -45,6 +45,26 @@ const SYSTEM_PROMPT = (chartOfAccounts, businessType, wfRules) => `You are an ex
 
 Extract ALL financial data. Document may be Thai, English, or mixed.
 
+CRITICAL — LINE ITEM EXTRACTION:
+Group line items by GL account category — do NOT post individual product lines.
+Professional accounting practice is to summarise by expense type:
+
+GROUPING RULES:
+- Group all items of the same type together into ONE line per GL account
+- Example: 10 food products → ONE line "Food Ingredients" → Cost of Goods Sold
+- Example: 3 cleaning items → ONE line "Cleaning Supplies" → Office Supplies
+- For single-item invoices → ONE line with the service/product description
+- For mixed invoices → group by GL category, maximum 5-6 lines total
+- NEVER post individual product lines from retail receipts
+
+AMOUNT RULES:
+- Amount per line = line amount EXCLUDING VAT
+- If VAT inclusive: line amount = item group total × 100/107
+- Sum of all line amounts (ex-VAT) must equal subtotal exactly
+- NEVER invent or estimate amounts — only use amounts clearly visible on document
+- If amounts unclear → ONE line with full subtotal, description "Goods and Services per invoice"
+- accountName for each line = most appropriate GL account from the chart of accounts provided
+
 CRITICAL — MULTI-PAGE DOCUMENT HANDLING:
 Thai petty cash documents often have multiple pages:
 - Page 1 is typically a SUMMARY SHEET (ใบสรุปค่าใช้จ่าย) — handwritten or typed totals only. DO NOT extract line items from this page.
@@ -60,7 +80,10 @@ YOU MUST prioritize data from supplier invoice/receipt pages (page 2+) over summ
 - ONLY use summary page data if there is absolutely no supplier invoice page present
 - A summary page typically has: handwritten amounts, no letterhead, no vendor VAT number, no ใบกำกับภาษี heading
 
-CHART OF ACCOUNTS (use EXACT names from this list for account classification):
+${client.businessDescription ? `BUSINESS CONTEXT (use this to correctly categorise expenses):
+${client.businessDescription}
+
+` : ""}CHART OF ACCOUNTS (use EXACT names from this list for account classification):
 ${chartOfAccounts.map(a => `- ${a.name} (${a.type})`).join('\n')}
 
 WORKFLOW RULES:
@@ -78,7 +101,10 @@ Return ONLY this JSON (no markdown):
   "taxInvoiceNumber": "tax invoice number (ใบกำกับภาษี number) if different from documentNumber",
   "voucherNumber": "petty cash voucher number (PC followed by digits e.g. PC1234) if present in document or filename",
   "currency": "THB|USD|EUR",
-  "lines": [{"description":"English description","amount":100.00,"accountName":"exact account name from chart"}],
+  "lines": [
+    {"description":"English description of item 1","amount":100.00,"accountName":"exact account name from chart"},
+    {"description":"English description of item 2","amount":50.00,"accountName":"exact account name from chart"}
+  ],
   "subtotal": 0,
   "discount": 0,
   "vatRate": 7,
@@ -197,7 +223,9 @@ function App() {
   const [duplicateCheck, setDuplicateCheck] = useState(null); // {result, matches, ri}
   const [periodModal, setPeriodModal] = useState(null); // {result, ri, suggestedDates}
   const [complianceModal, setComplianceModal] = useState(null); // {result, ri, report}
-  const [glModal, setGlModal] = useState(null); // {description, vendor, suggestion, accounts}
+  const [glModal, setGlModal] = useState(null);
+  const [lineReviewModal, setLineReviewModal] = useState(null); // {resolve, lines, vendor, total, vatAmount, vatType}
+  const lineReviewResolveRef = useRef(null); // {description, vendor, suggestion, accounts}
   const glResolveRef = useRef(null); // stores resolve callback for GL modal
   const [showPeriods, setShowPeriods] = useState(false);
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
@@ -1033,9 +1061,32 @@ function App() {
 
       const rawLines = (ex.lines||[{description: ex.transactions?.[0]?.description||"Service", amount: ex.totalAmount||0, accountName: ex.transactions?.[0]?.category||""}]);
 
+      // Show line review modal before posting — let user verify groupings
+      const { vatLines: previewVatLines, vatType: previewVatType } = buildVATLines(ex, client, rawLines);
+      const approvedLines = await new Promise((resolve) => {
+        lineReviewResolveRef.current = resolve;
+        setLineReviewModal({
+          lines: rawLines,
+          vendor: ex.vendor || "Unknown vendor",
+          total: ex.totalAmount,
+          vatAmount: ex.vatAmount,
+          vatType: previewVatType,
+          docNumber: ex.documentNumber,
+          voucherNumber: ex.voucherNumber,
+        });
+      });
+
+      if (!approvedLines) {
+        setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — lines not approved"}}));
+        return;
+      }
+
+      // Use approved (possibly edited) lines
+      const finalRawLines = approvedLines;
+
       // Resolve GL accounts with learning
       const resolvedLines = [];
-      for (const l of rawLines) {
+      for (const l of finalRawLines) {
         const accountRef = await resolveGLAccount(l.accountName, l.description);
         if (!accountRef) {
           setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — GL account not selected"}}));
@@ -1778,6 +1829,13 @@ function App() {
                   </select>
                 </div>
                 <div style={{marginBottom:14}}>
+                  <label style={labelStyle}>Business Description</label>
+                  <textarea value={editingClient.businessDescription||""} onChange={e=>setEditingClient(c=>({...c,businessDescription:e.target.value}))} 
+                    placeholder="e.g. Health retreat and restaurant in Phuket. Main purchases: food ingredients for kitchen, cleaning supplies, spa products, office stationery, equipment. Staff meals are internal not entertainment."
+                    style={{...inputStyle,height:80,resize:"vertical",lineHeight:1.8}}/>
+                  <div style={{fontSize:10,color:"#334155",marginTop:4}}>Helps AI correctly categorise expenses for this specific business</div>
+                </div>
+                <div style={{marginBottom:14}}>
                   <label style={labelStyle}>VAT Tax Code (in QBO)</label>
                   <input value={editingClient.vatTaxCode||"7.0% S"} onChange={e=>setEditingClient(c=>({...c,vatTaxCode:e.target.value}))} placeholder="7.0% S" style={inputStyle}/>
                 </div>
@@ -2173,6 +2231,77 @@ function App() {
             </div>
           </div>
         )}
+
+      {/* ═══ LINE REVIEW MODAL ═══ */}
+      {lineReviewModal && (
+        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:20}}>
+          <div style={{background:"#0d1b35",border:"1px solid #1e3a5f",borderRadius:14,padding:28,maxWidth:620,width:"100%",maxHeight:"90vh",display:"flex",flexDirection:"column",animation:"fadeUp 0.2s ease"}}>
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>REVIEW BEFORE POSTING</div>
+              <div style={{fontSize:15,fontWeight:"bold",color:"#f1f5f9"}}>{lineReviewModal.vendor}</div>
+              <div style={{fontSize:11,color:"#475569"}}>
+                {lineReviewModal.voucherNumber && `${lineReviewModal.voucherNumber} · `}
+                {lineReviewModal.docNumber && `#${lineReviewModal.docNumber} · `}
+                Total: ฿{(lineReviewModal.total||0).toLocaleString()}
+              </div>
+            </div>
+
+            <div style={{fontSize:11,color:"#475569",marginBottom:8}}>AI grouped line items — verify before posting:</div>
+
+            {/* Line items */}
+            <div style={{flex:1,overflow:"auto",border:"1px solid #162032",borderRadius:8,marginBottom:16}}>
+              {lineReviewModal.lines.map((line,i)=>(
+                <div key={i} style={{padding:"12px 16px",borderBottom:"1px solid rgba(22,32,50,0.6)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
+                    <div style={{flex:1}}>
+                      <input 
+                        defaultValue={line.description}
+                        onChange={e=>{lineReviewModal.lines[i].description=e.target.value;}}
+                        style={{width:"100%",background:"transparent",border:"none",borderBottom:"1px solid #1e3a5f",color:"#e2e8f0",fontSize:12,padding:"2px 0",fontFamily:"monospace"}}
+                      />
+                      <div style={{fontSize:10,color:"#3b82f6",marginTop:4}}>{line.accountName||"— no account —"}</div>
+                    </div>
+                    <div style={{fontSize:13,color:"#e2e8f0",fontWeight:"bold",whiteSpace:"nowrap"}}>
+                      ฿{(line.amount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {/* VAT line preview */}
+              {lineReviewModal.vatAmount > 0 && (
+                <div style={{padding:"12px 16px",background:"rgba(59,130,246,0.05)"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div>
+                      <div style={{fontSize:12,color:"#94a3b8"}}>VAT 7%</div>
+                      <div style={{fontSize:10,color:lineReviewModal.vatType==="confirmed"?"#10b981":"#f59e0b"}}>
+                        → {lineReviewModal.vatType==="confirmed"?"Input Tax - Confirmed ✅":"Input Tax - Pending ⏳"}
+                      </div>
+                    </div>
+                    <div style={{fontSize:13,color:"#94a3b8",fontWeight:"bold"}}>
+                      ฿{(lineReviewModal.vatAmount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div style={{fontSize:11,color:"#334155",marginBottom:16,padding:10,background:"rgba(22,32,50,0.3)",borderRadius:6}}>
+              ℹ️ You can edit descriptions above. GL accounts will be confirmed in the next step. Click Post to continue.
+            </div>
+
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+              <button onClick={()=>{lineReviewResolveRef.current?.(null);lineReviewResolveRef.current=null;setLineReviewModal(null);}} 
+                style={{padding:"9px 18px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:7,color:"#64748b",cursor:"pointer",fontSize:12}}>
+                Cancel
+              </button>
+              <button onClick={()=>{lineReviewResolveRef.current?.(lineReviewModal.lines);lineReviewResolveRef.current=null;setLineReviewModal(null);}} 
+                style={{padding:"9px 20px",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:"bold"}}>
+                ✓ Lines Look Good — Post
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══ GL ACCOUNT MODAL ═══ */}
       {glModal && (
