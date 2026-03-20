@@ -386,23 +386,74 @@ function App() {
       }
       const accounts = allAccounts.map(a => ({ id: a.Id, name: a.Name, type: a.AccountType, subtype: a.AccountSubType }));
 
-      // Load custom field definitions by fetching a sample expense with custom fields
+      // Load custom field definitions
       let customFields = client.customFields || {};
       try {
-        const expData = await qboGet(client, `/query?query=select * from Purchase MAXRESULTS 1&include=enhancedAllCustomFields`);
-        const sampleExp = expData.QueryResponse?.Purchase?.[0];
-        if (sampleExp?.CustomField) {
-          sampleExp.CustomField.forEach(cf => {
-            if (cf.Name) customFields[cf.Name.toLowerCase()] = { definitionId: cf.DefinitionId, name: cf.Name, type: cf.Type };
+        // Try fetching from existing Purchase transactions
+        const expData = await qboGet(client, `/query?query=select * from Purchase MAXRESULTS 5&include=enhancedAllCustomFields`);
+        const purchases = expData.QueryResponse?.Purchase || [];
+        purchases.forEach(tx => {
+          (tx.CustomField||[]).forEach(cf => {
+            if (cf.Name && cf.DefinitionId) {
+              customFields[cf.Name.toLowerCase()] = { definitionId: cf.DefinitionId, name: cf.Name, type: cf.Type };
+            }
           });
-        }
+        });
         // Also try Bills
-        const billData = await qboGet(client, `/query?query=select * from Bill MAXRESULTS 1&include=enhancedAllCustomFields`);
-        const sampleBill = billData.QueryResponse?.Bill?.[0];
-        if (sampleBill?.CustomField) {
-          sampleBill.CustomField.forEach(cf => {
-            if (cf.Name) customFields[cf.Name.toLowerCase()] = { definitionId: cf.DefinitionId, name: cf.Name, type: cf.Type };
+        const billData = await qboGet(client, `/query?query=select * from Bill MAXRESULTS 5&include=enhancedAllCustomFields`);
+        const bills = billData.QueryResponse?.Bill || [];
+        bills.forEach(tx => {
+          (tx.CustomField||[]).forEach(cf => {
+            if (cf.Name && cf.DefinitionId) {
+              customFields[cf.Name.toLowerCase()] = { definitionId: cf.DefinitionId, name: cf.Name, type: cf.Type };
+            }
           });
+        });
+        // Try CompanyInfo custom fields
+        try {
+          const compData = await qboGet(client, `/companyinfo/${client.qboRealmId}`);
+          const compCF = compData.CompanyInfo?.CustomField || [];
+          compCF.forEach(cf => {
+            if (cf.Name && cf.DefinitionId) {
+              customFields[cf.Name.toLowerCase()] = { definitionId: cf.DefinitionId, name: cf.Name, type: cf.Type };
+            }
+          });
+        } catch(e) { console.warn("CompanyInfo CF failed:", e); }
+
+        // Try querying custom field definitions directly via each entity type
+        // QBO stores custom field defs on the entity — query with a dummy filter to get schema
+        for (const entity of ["Purchase", "Bill"]) {
+          try {
+            const schemaData = await qboGet(client, `/query?query=select * from ${entity} where Id = '0'&include=enhancedAllCustomFields`);
+            // Even empty results may return custom field schema in some QBO versions
+            const items = schemaData.QueryResponse?.[entity] || [];
+            items.forEach(tx => {
+              (tx.CustomField||[]).forEach(cf => {
+                if (cf.Name && cf.DefinitionId) {
+                  customFields[cf.Name.toLowerCase()] = { definitionId: cf.DefinitionId, name: cf.Name, type: cf.Type };
+                }
+              });
+            });
+          } catch(e) { console.warn(`Schema query failed for ${entity}:`, e); }
+        }
+
+        // If still no custom fields found, try fetching most recent transactions
+        if (Object.keys(customFields).length === 0) {
+          try {
+            const recentExp = await qboGet(client, `/query?query=select * from Purchase ORDERBY MetaData.LastUpdatedTime DESC MAXRESULTS 10&include=enhancedAllCustomFields`);
+            (recentExp.QueryResponse?.Purchase||[]).forEach(tx => {
+              (tx.CustomField||[]).forEach(cf => {
+                if (cf.Name && cf.DefinitionId) {
+                  customFields[cf.Name.toLowerCase()] = { definitionId: cf.DefinitionId, name: cf.Name, type: cf.Type };
+                }
+              });
+            });
+          } catch(e) { console.warn("Recent transactions CF failed:", e); }
+        }
+
+        console.log("Loaded custom fields:", JSON.stringify(customFields));
+        if (Object.keys(customFields).length === 0) {
+          console.warn("No custom fields found — to fix: manually enter a tax invoice number in any QBO expense, then click Refresh GL");
         }
       } catch(e) { console.warn("Custom fields load failed:", e); }
 
@@ -1132,14 +1183,18 @@ function App() {
     const fields = [];
     if (!taxInvoiceNumber) return fields;
     const customFields = client?.customFields || {};
+    console.log("buildCustomFields — taxInvoiceNumber:", taxInvoiceNumber, "customFields:", JSON.stringify(customFields));
     // Look for "tax invoice" field by various possible names
     const taxInvField = customFields["tax invoice"] || 
                         customFields["tax invoice no"] || 
                         customFields["tax invoice number"] ||
                         customFields["taxinvoice"] ||
                         Object.values(customFields).find(f => f.name?.toLowerCase().includes("tax"));
+    console.log("taxInvField found:", JSON.stringify(taxInvField));
     if (taxInvField?.definitionId) {
       fields.push({ DefinitionId: taxInvField.definitionId, StringValue: taxInvoiceNumber });
+    } else {
+      console.warn("Tax Invoice custom field not found in client.customFields — try refreshing GL accounts");
     }
     return fields;
   }
