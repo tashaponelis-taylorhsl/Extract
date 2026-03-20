@@ -67,6 +67,8 @@ AMOUNT RULES:
 - For grouped lines: distribute the subtotal proportionally across groups
 - NEVER let sum of lines differ from subtotal field — adjust if needed
 - NEVER invent or estimate amounts — only use amounts clearly visible on document
+- NEVER repeat zeros or invent document numbers — if a field is not found use empty string ""
+- Document numbers, invoice numbers, tax invoice numbers must be read exactly as printed — never substitute with zeros
 - If amounts unclear → ONE line: description "Goods and Services per invoice", amount = subtotal
 - accountName for each line = most appropriate GL account from the chart of accounts provided
 - linesAreIncVat: set to true if original document shows VAT-inclusive line prices (before your conversion)
@@ -103,8 +105,8 @@ Return ONLY this JSON (no markdown):
   "vendorVatNumber": "Thai VAT registration number if present",
   "documentDate": "MM/DD/YYYY",
   "dueDate": "MM/DD/YYYY or null",
-  "documentNumber": "invoice/document number or supplier invoice number",
-  "taxInvoiceNumber": "tax invoice number — for combined ใบเสร็จรับเงิน/ใบกำกับภาษี documents use the receipt number (เลขที่ใบเสร็จ/Receipt No.) as this IS the tax invoice number. Look for fields labeled: เลขที่ใบเสร็จ, Receipt No., เลขที่ใบกำกับภาษี, Tax Invoice No.",
+  "documentNumber": "invoice/document number or supplier invoice number — use the actual number printed on the document. If no document number is found leave as empty string \"\", NEVER invent or repeat zeros",
+  "taxInvoiceNumber": "tax invoice number — search carefully for these labels anywhere on the document: เลขที่ใบเสร็จ, เลขที่ใบกำกับภาษี, Receipt No., Tax Invoice No., Inv No., เลขที่. For Go Wholesale/Makro/retail receipts the number is printed near the top right corner next to Receipt No. or เลขที่ใบเสร็จ — it often starts with PK, IV, or similar prefix followed by digits. Read it character by character carefully. If genuinely not found leave as empty string \"\"",
   "voucherNumber": "petty cash voucher number (PC followed by digits e.g. PC1234) if present in document or filename",
   "currency": "THB|USD|EUR",
   "lines": [
