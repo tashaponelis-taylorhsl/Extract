@@ -147,28 +147,38 @@ Return ONLY this JSON (no markdown):
   }
 }
 
-COMPLIANCE RULES — fill taxInvoiceCompliance if document contains ANY of these tax invoice indicators:
-- ใบกำกับภาษี (tax invoice) — in any position on document
+COMPLIANCE RULES — fill taxInvoiceCompliance if document contains ANY of these tax invoice indicators.
+SEARCH THE ENTIRE DOCUMENT — every page, every line, every column, every section:
+- ใบกำกับภาษี — can appear ANYWHERE: header, middle, footer, stamp, watermark, small text
 - ใบกำกับภาษีอย่างย่อ (abbreviated tax invoice)
-- ใบเสร็จรับเงิน/ใบกำกับภาษี (receipt/tax invoice combined)
-- ใบกำกับภาษี/ใบเสร็จรับเงิน (tax invoice/receipt — reversed order)
-- ใบเสร็จรับเงิน / ใบกำกับภาษี (with spaces around slash)
+- ใบเสร็จรับเงิน/ใบกำกับภาษี (combined — very common in Thai retail)
+- ใบกำกับภาษี/ใบเสร็จรับเงิน (reversed order)
+- ใบเสร็จรับเงิน / ใบกำกับภาษี (with spaces)
 - ใบกำกับภาษี / ใบเสร็จรับเงิน (reversed with spaces)
-- ใบเสร็จรับเงินใบกำกับภาษี (no slash, no space)
-- ใบกำกับภาษีใบเสร็จรับเงิน (reversed, no slash)
-- TAX INVOICE (English, any capitalisation)
-- Tax Invoice, tax invoice (mixed case English)
+- ใบเสร็จรับเงินใบกำกับภาษี (no separator)
+- TAX INVOICE (English, any capitalisation, any position)
+- Tax Invoice, tax invoice
 - ORIGINAL TAX INVOICE, COPY TAX INVOICE
+
+CRITICAL SEARCH INSTRUCTION: For Go Wholesale, Makro, Lotus and similar Thai retailers:
+The words ใบเสร็จรับเงิน/ใบกำกับภาษี appear as a HEADING IN THE MIDDLE of the receipt page
+They are NOT at the top of the page — they appear after the store header and before the line items
+You MUST scan the entire page carefully — look at EVERY line of text on EVERY page
+Do not give up after checking just the top portion — the heading may be halfway down the page
 
 - vendorVatNumberValid: must be exactly 13 digits
 - hasThaiTaxInvoiceHeading: true if ANY of the above tax invoice words appear ANYWHERE on the document — in the header, footer, middle of page, inline text, or stamp. Position does not matter.
 - IMPORTANT: A vendor TAX ID alone does NOT make a document a tax invoice — one of the tax invoice words must also be present somewhere on the document
 - Regular invoices (ใบแจ้งหนี้), quotations (ใบเสนอราคา), delivery notes (ใบส่งของ) may have TAX ID but are NOT tax invoices unless ใบกำกับภาษี also appears
-- Thai retailers commonly print ใบเสร็จรับเงิน/ใบกำกับภาษี in the MIDDLE of the receipt — this is still a valid tax invoice heading
-- Look carefully through the ENTIRE document for these words — do not only check the top header area
-- complianceResult: PASS=all required fields present, WARN=minor issues (missing buyer VAT etc), FAIL=missing critical fields (no vendor VAT, no amount, no date)
+- Thai retailers (Go Wholesale, Makro, Lotus, BigC) commonly print ใบเสร็จรับเงิน/ใบกำกับภาษี in the MIDDLE of the receipt as a heading — this IS a valid tax invoice heading
+- Look carefully through the ENTIRE document for these words — scan every line, every section, every column
+- The words may appear: as a heading in the middle of the page, next to the receipt number, in a box or underlined, or combined with a slash ใบเสร็จรับเงิน/ใบกำกับภาษี
+- If you see ใบเสร็จรับเงิน/ใบกำกับภาษี anywhere on ANY page → hasThaiTaxInvoiceHeading = true
+- Do NOT mark as false just because it is not at the very top of the document
+- complianceResult: PASS=all required fields present, WARN=minor issues (heading position unclear, missing buyer VAT etc), FAIL=missing critical fields (no vendor VAT, no amount, no date)
 - Critical fields: vendorVatNumber, documentNumber, documentDate, amountExVat, vatAmount, totalIncVat
-- Minor fields: buyerVatNumber, issuerSignatureOrStamp, buyerAddress
+- Minor fields: buyerVatNumber, issuerSignatureOrStamp, buyerAddress, hasThaiTaxInvoiceHeading
+- IMPORTANT: hasThaiTaxInvoiceHeading is CRITICAL — Thai Revenue Code requires the words ใบกำกับภาษี to be physically present on the document
 - NOTE: ใบเสร็จรับเงิน/ใบกำกับภาษี combined documents ARE valid tax invoices — treat as PASS if all critical fields present
 - VAT on retail receipts: ALWAYS read the actual VAT amount printed on the document — NEVER calculate VAT from the total
 - Thai retail receipts often have a mix of 7% VAT items and 0% VAT items (fresh food, unprocessed items) — the VAT amount shown is already the correct total VAT
@@ -617,6 +627,8 @@ function App() {
     const hasValidTaxInvoice = !!(ex.taxInvoiceCompliance?.vendorVatNumberValid && ex.taxInvoiceNumber);
     // hasAnyTaxInvoice requires explicit tax invoice heading — TAX ID alone is NOT sufficient
     // A regular invoice or quotation can have a TAX ID without being a valid ใบกำกับภาษี
+    // Tax invoice heading MUST be present — Thai Revenue Code requirement
+    // Having vendor VAT + VAT amount alone is NOT sufficient — words must appear on document
     const hasAnyTaxInvoice = !!(
       ex.taxInvoiceNumber || 
       ex.taxInvoiceCompliance?.hasThaiTaxInvoiceHeading
