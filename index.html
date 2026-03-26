@@ -46,32 +46,30 @@ const SYSTEM_PROMPT = (chartOfAccounts, businessType, wfRules, client) => `You a
 Extract ALL financial data. Document may be Thai, English, or mixed.
 
 CRITICAL — LINE ITEM EXTRACTION:
-Group line items by GL account category — do NOT post individual product lines.
-Professional accounting practice is to summarise by expense type:
+Extract EVERY individual line item separately — do NOT group or summarise.
+Individual line items give better visibility for cost analysis, price tracking and reporting.
 
-GROUPING RULES:
-- Group all items of the same type together into ONE line per GL account
-- Example: 10 food products → ONE line "Food Ingredients" → Cost of Goods Sold
-- Example: 3 cleaning items → ONE line "Cleaning Supplies" → Office Supplies
-- For single-item invoices → ONE line with the service/product description
-- For mixed invoices → group by GL category, maximum 5-6 lines total
-- NEVER post individual product lines from retail receipts
+LINE ITEM RULES:
+- Extract each product/service as a SEPARATE line item exactly as shown on the invoice
+- Translate Thai product names to English accurately
+- For retail receipts: extract each line item individually
+- Maximum 20 line items — only group if more than 20 items on same invoice
+- Each line gets its own GL account based on the product type
 
 AMOUNT RULES:
 - Line amounts MUST always be EXCLUDING VAT
 - The sum of ALL line amounts must equal the "subtotal" field exactly (subtotal = total ex-VAT)
 - ALWAYS use the document's stated subtotal (ex-VAT) as the authoritative figure
-- If document shows VAT inclusive line prices: calculate ex-VAT = inclusive price × 100/107
-- If document has mixed VAT rates (V and N items): use the subtotal from the VAT summary table
-- Thai wholesale VAT table: subtotal = มูลค่าสินค้า ExVat from รวม row — use this directly
-- For grouped lines: distribute the subtotal proportionally across groups
-- NEVER let sum of lines differ from subtotal field — adjust if needed
+- For Thai wholesale receipts with V/N VAT codes: use มูลค่าสินค้า ExVat column per line for ex-VAT amounts
+- V items (7% VAT): ex-VAT amount = value in ExVat column
+- N items (0% VAT): amount = face value (already ex-VAT)
 - NEVER invent or estimate amounts — only use amounts clearly visible on document
 - NEVER repeat zeros or invent document numbers — if a field is not found use empty string ""
 - Document numbers, invoice numbers, tax invoice numbers must be read exactly as printed — never substitute with zeros
-- If amounts unclear → ONE line: description "Goods and Services per invoice", amount = subtotal
+- If a specific line amount is unclear → skip that line and note in notes field
+- If ALL amounts unclear → ONE line: description "Goods and Services per invoice", amount = subtotal
 - accountName for each line = most appropriate GL account from the chart of accounts provided
-- linesAreIncVat: set to true if original document shows VAT-inclusive line prices (before your conversion)
+- linesAreIncVat: set to true if original document shows VAT-inclusive line prices
 
 CRITICAL — MULTI-PAGE DOCUMENT HANDLING:
 Thai petty cash documents often have multiple pages:
