@@ -1500,19 +1500,18 @@ function App() {
         }
       }
 
-      // Mark as processed and move to Done folder
-      if (result.fileId) {
-        markFileProcessed(client.id, result.fileId, result.file, txId, txType, {
-          vendor: ex.vendor,
-          amount: ex.totalAmount,
-          currency: ex.currency,
-          documentDate: ex.documentDate,
-          taxInvoiceNumber: ex.taxInvoiceNumber,
-          voucherNumber: ex.voucherNumber,
-        });
-        if (graphToken && result.driveId && result.folderPath) {
-          await moveFileToDone(result.fileId, result.driveId, result.folderPath, client, graphToken);
-        }
+      // Mark as processed — use fileId for Teams files, generate ID for uploads
+      const trackingId = result.fileId || `upload_${Date.now()}_${result.file}`;
+      markFileProcessed(client.id, trackingId, result.file, txId, txType, {
+        vendor: ex.vendor,
+        amount: ex.totalAmount,
+        currency: ex.currency,
+        documentDate: ex.documentDate,
+        taxInvoiceNumber: ex.taxInvoiceNumber,
+        voucherNumber: ex.voucherNumber,
+      });
+      if (result.fileId && graphToken && result.driveId && result.folderPath) {
+        await moveFileToDone(result.fileId, result.driveId, result.folderPath, client, graphToken);
       }
 
       const cfPopulated = buildCustomFields(currentClient||client, ex.taxInvoiceNumber||null).length > 0;
@@ -2496,9 +2495,53 @@ ${text.slice(0,12000)}`}]})});
                             <tbody>
                               {(ex.lines||[{description:ex.transactions?.[0]?.description||"Service",amount:ex.totalAmount||0,accountName:ex.transactions?.[0]?.category||"—"}]).map((l,li)=>(
                                 <tr key={li} style={{borderBottom:"1px solid rgba(22,32,50,0.6)"}}>
-                                  <td style={{padding:"10px 14px",color:"#e2e8f0"}}>{l.description}</td>
                                   <td style={{padding:"10px 14px"}}>
-                                    <span style={{padding:"2px 8px",background:"rgba(6,182,212,0.08)",border:"1px solid rgba(6,182,212,0.15)",borderRadius:4,fontSize:10,color:"#06b6d4"}}>{l.accountName||"—"}</span>
+                                    <input
+                                      defaultValue={l.description}
+                                      onChange={e=>{
+                                        const updatedResults = results.map((r,idx) => {
+                                          if (idx !== ri) return r;
+                                          const updatedLines = (r.extracted?.lines||[]).map((line,li2) =>
+                                            li2 === li ? {...line, description: e.target.value} : line
+                                          );
+                                          return {...r, extracted: {...r.extracted, lines: updatedLines}};
+                                        });
+                                        setResults(updatedResults);
+                                      }}
+                                      style={{background:"transparent",border:"none",borderBottom:"1px solid transparent",color:"#e2e8f0",fontSize:13,fontFamily:"monospace",width:"100%",padding:"2px 0",cursor:"text"}}
+                                      onFocus={e=>e.target.style.borderBottomColor="#3b82f6"}
+                                      onBlur={e=>e.target.style.borderBottomColor="transparent"}
+                                    />
+                                  </td>
+                                  <td style={{padding:"10px 14px"}}>
+                                    <button onClick={()=>{
+                                      const accounts = clients.find(c=>c.id===activeClient)?.chartOfAccounts||[];
+                                      glResolveRef.current = (acc) => {
+                                        if (acc) {
+                                          // Update the line account in results
+                                          const updatedResults = results.map((r,idx) => {
+                                            if (idx !== ri) return r;
+                                            const updatedLines = (r.extracted?.lines||[]).map((line, li2) => 
+                                              li2 === li ? {...line, accountName: acc.name} : line
+                                            );
+                                            return {...r, extracted: {...r.extracted, lines: updatedLines}};
+                                          });
+                                          setResults(updatedResults);
+                                        }
+                                        setGlModal(null);
+                                      };
+                                      setGlModal({
+                                        description: l.description,
+                                        vendor: ex?.vendor||"",
+                                        suggestion: l.accountName,
+                                        suggestionSource: "📋 Current",
+                                        suggestionConfidence: 100,
+                                        accounts,
+                                        quickConfirm: false,
+                                      });
+                                    }} style={{padding:"2px 8px",background:"rgba(6,182,212,0.08)",border:"1px solid rgba(6,182,212,0.15)",borderRadius:4,fontSize:10,color:"#06b6d4",cursor:"pointer",fontFamily:"monospace"}}>
+                                      {l.accountName||"— select —"} ✏️
+                                    </button>
                                   </td>
                                   <td style={{padding:"10px 14px",textAlign:"right",fontWeight:"bold",color:"#f87171",fontFamily:"monospace"}}>{fmt(Math.abs(l.amount))}</td>
                                 </tr>
@@ -2743,7 +2786,29 @@ ${text.slice(0,12000)}`}]})});
                         onChange={e=>{lineReviewModal.lines[i].description=e.target.value;}}
                         style={{width:"100%",background:"transparent",border:"none",borderBottom:"1px solid #1e3a5f",color:"#e2e8f0",fontSize:12,padding:"2px 0",fontFamily:"monospace"}}
                       />
-                      <div style={{fontSize:10,color:"#3b82f6",marginTop:4}}>{line.accountName||"— no account —"}</div>
+                      <button onClick={()=>{
+                        // Open GL modal to change this line's account
+                        const currentSuggestion = line.accountName;
+                        glResolveRef.current = (acc) => {
+                          if (acc) {
+                            lineReviewModal.lines[i].accountName = acc.name;
+                            lineReviewModal.lines[i].accountId = acc.value;
+                            setLineReviewModal({...lineReviewModal});
+                          }
+                          setGlModal(null);
+                        };
+                        setGlModal({
+                          description: line.description,
+                          vendor: lineReviewModal.vendor,
+                          suggestion: currentSuggestion,
+                          suggestionSource: "📋 Current selection",
+                          suggestionConfidence: 100,
+                          accounts: (clients.find(c=>c.id===activeClient)?.chartOfAccounts||[]),
+                          quickConfirm: false,
+                        });
+                      }} style={{fontSize:10,color:"#3b82f6",marginTop:4,background:"transparent",border:"none",cursor:"pointer",padding:0,textAlign:"left",textDecoration:"underline dotted",fontFamily:"monospace"}}>
+                        ✏️ {line.accountName||"— tap to select account —"}
+                      </button>
                     </div>
                     <div style={{fontSize:13,color:"#e2e8f0",fontWeight:"bold",whiteSpace:"nowrap"}}>
                       ฿{(line.amount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
