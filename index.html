@@ -286,6 +286,12 @@ function App() {
       const savedUser = localStorage.getItem("extract_user");
       if (savedUser) setCurrentUser(JSON.parse(savedUser));
     } catch(e) {}
+    // Auto-load users from KV on startup
+    kvGet(`users:${TRUSTED_DOMAIN}`).then(u => {
+      if (u && u.length > 0) setUsersData(u);
+      setUsersLoaded(true);
+    }).catch(e => console.warn("Users load failed:", e));
+
     // Load shared MS settings from KV if not in localStorage
     try {
       const localSettings = JSON.parse(localStorage.getItem("extract_settings")||"{}");
@@ -383,8 +389,12 @@ function App() {
   const saveClients = (c) => { 
     setClients(c); 
     localStorage.setItem("extract_clients", JSON.stringify(c));
-    // Also save to KV for persistence across devices
-    kvSet(`clients:${KV_USER}`, c).catch(e => console.warn("KV save failed:", e));
+    // Save to KV — strip chartOfAccounts to keep payload small (reload from QBO when needed)
+    const lightweight = c.map(client => {
+      const {chartOfAccounts, ...rest} = client;
+      return rest;
+    });
+    kvSet(`clients:${KV_USER}`, lightweight).catch(e => console.warn("KV save failed:", e));
   };
 
   // ── Vercel KV (Upstash) ──────────────────────────────────────────────
@@ -2070,21 +2080,33 @@ ${text.slice(0,12000)}`}]})});
               <div style={{display:"flex",gap:8}}>
                 <button className="btn" style={btnSecondary} onClick={()=>document.getElementById("import-client").click()}>📥 Import Client</button>
               <button className="btn" style={{...btnSecondary,color:"#10b981",borderColor:"rgba(16,185,129,0.3)"}} onClick={async()=>{
-                const kvClients = await kvGet(`clients:${KV_USER}`);
-                if (kvClients && kvClients.length > 0) {
-                  setClients(kvClients);
+                try {
+                  const kvClients = await kvGet(`clients:${KV_USER}`);
+                  if (!kvClients || kvClients.length === 0) {
+                    alert("No cloud backup found. Please sync data first using the ☁️ Sync button.");
+                    return;
+                  }
+                  // Restore clients
                   localStorage.setItem("extract_clients", JSON.stringify(kvClients));
+                  setClients(kvClients);
+                  // Restore GL memory and other data for each client
                   for (const c of kvClients) {
-                    const glMemory = await kvGet(`gl_memory:${c.id}`);
-                    if (glMemory) localStorage.setItem(`gl_memory_${c.id}`, JSON.stringify(glMemory));
-                    const periods = await kvGet(`periods:${c.id}`);
-                    if (periods) localStorage.setItem(`closed_periods_${c.id}`, JSON.stringify(periods));
-                    const processed = await kvGet(`processed:${c.id}`);
-                    if (processed) localStorage.setItem(`processed_files_${c.id}`, JSON.stringify(processed));
+                    try {
+                      const glMemory = await kvGet(`gl_memory:${c.id}`);
+                      if (glMemory) localStorage.setItem(`gl_memory_${c.id}`, JSON.stringify(glMemory));
+                    } catch(e) {}
+                    try {
+                      const periods = await kvGet(`periods:${c.id}`);
+                      if (periods) localStorage.setItem(`closed_periods_${c.id}`, JSON.stringify(periods));
+                    } catch(e) {}
+                    try {
+                      const processed = await kvGet(`processed:${c.id}`);
+                      if (processed) localStorage.setItem(`processed_files_${c.id}`, JSON.stringify(processed));
+                    } catch(e) {}
                   }
                   alert(`✅ Restored ${kvClients.length} client(s) and all GL learning from cloud!`);
-                } else {
-                  alert("No cloud backup found. Please sync data first using the ☁️ Sync button on each client.");
+                } catch(e) {
+                  alert("Restore failed: " + e.message);
                 }
               }}>☁️ Restore from Cloud</button>
                 <button className="btn" style={btnPrimary} onClick={()=>{setEditingClient({id:iid(),name:"",businessType:"Other",qboClientId:"",qboClientSecret:"",defaultTxType:"Bill",pettyCashAccount:"Petty Cash",customRules:"",chartOfAccounts:[]});setView(VIEWS.EDIT_CLIENT);}}>+ Add Client</button>
