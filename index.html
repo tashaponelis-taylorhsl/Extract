@@ -261,7 +261,10 @@ function App() {
   const glResolveRef = useRef(null); // stores resolve callback for GL modal
   const [showPeriods, setShowPeriods] = useState(false);
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
-  const [currentUser, setCurrentUser] = useState(null); // {email, name, role, assignedClients}
+  const [currentUser, setCurrentUser] = useState(null);
+  const [usersData, setUsersData] = useState([]);
+  const [usersLoaded, setUsersLoaded] = useState(false);
+  const [newUserEmail, setNewUserEmail] = useState(""); // {email, name, role, assignedClients}
   const [userLoading, setUserLoading] = useState(false);
   const fileInputRef = useRef();
 
@@ -2789,121 +2792,136 @@ ${text.slice(0,12000)}`}]})});
         })()}
 
         {/* ═══ USERS ═══ */}
-        {view===VIEWS.USERS && (()=>{
-          const [users, setUsers] = React.useState([]);
-          const [loading, setLoading] = React.useState(true);
+        {view===VIEWS.USERS && (
+          <div style={{animation:"fadeUp 0.3s ease",maxWidth:800}}>
+            <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>USER MANAGEMENT</div>
+            <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9",marginBottom:24}}>Team Access Control</div>
 
-          React.useEffect(()=>{
-            kvGet(`users:${TRUSTED_DOMAIN}`).then(u=>{setUsers(u||[]);setLoading(false);});
-          },[]);
+            {/* Add user manually */}
+            <div style={{...card,padding:20,marginBottom:16}}>
+              <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:12}}>ADD USER MANUALLY</div>
+              <div style={{display:"flex",gap:10}}>
+                <input value={newUserEmail} onChange={e=>setNewUserEmail(e.target.value)}
+                  placeholder="email@taylorhsl.com" style={{...inputStyle,flex:1}}/>
+                <button className="btn" style={btnPrimary} onClick={async()=>{
+                  const email = newUserEmail.trim().toLowerCase();
+                  if (!email || !email.includes("@")) { alert("Please enter a valid email"); return; }
+                  const existing = usersData.find(u=>u.email===email);
+                  if (existing) { alert("User already exists"); return; }
+                  const isAdmin = email === ADMIN_EMAIL.toLowerCase();
+                  const newUser = {
+                    email, name: email.split("@")[0],
+                    role: isAdmin ? "admin" : "bookkeeper",
+                    assignedClients: isAdmin ? "all" : [],
+                    addedAt: new Date().toISOString(),
+                  };
+                  const updated = [...usersData, newUser];
+                  setUsersData(updated);
+                  await kvSet(`users:${TRUSTED_DOMAIN}`, updated);
+                  setNewUserEmail("");
+                  alert(`✅ Added ${email}`);
+                }}>+ Add User</button>
+              </div>
+              <div style={{fontSize:10,color:"#334155",marginTop:6}}>Users can also be added automatically when they sign in with Microsoft 365</div>
+            </div>
 
-          const saveUsers = async (updated) => {
-            setUsers(updated);
-            await kvSet(`users:${TRUSTED_DOMAIN}`, updated);
-          };
+            {/* Load users button */}
+            {!usersLoaded && (
+              <button className="btn" style={{...btnSecondary,marginBottom:16}} onClick={async()=>{
+                const u = await kvGet(`users:${TRUSTED_DOMAIN}`);
+                setUsersData(u||[]);
+                setUsersLoaded(true);
+              }}>Load Users from Cloud</button>
+            )}
 
-          return (
-            <div style={{animation:"fadeUp 0.3s ease",maxWidth:800}}>
-              <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>USER MANAGEMENT</div>
-              <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9",marginBottom:24}}>Team Access Control</div>
+            {/* Users list */}
+            <div style={{...card,overflow:"hidden"}}>
+              <div style={{padding:"12px 18px",borderBottom:"1px solid #162032",fontSize:11,color:"#475569",letterSpacing:"0.1em"}}>
+                {usersData.length} USERS
+              </div>
 
-              {loading && <div style={{color:"#475569"}}>Loading users...</div>}
-
-              {!loading && (
-                <div style={{...card,overflow:"hidden"}}>
-                  <div style={{padding:"12px 18px",borderBottom:"1px solid #162032",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div style={{fontSize:11,color:"#475569",letterSpacing:"0.1em"}}>{users.length} USERS</div>
-                  </div>
-
-                  {users.map((user,i)=>(
-                    <div key={user.email} style={{padding:"16px 18px",borderBottom:"1px solid rgba(22,32,50,0.6)"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-                        <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:"bold",fontSize:14,flexShrink:0}}>
-                          {user.name?.[0]?.toUpperCase()||"?"}
-                        </div>
-                        <div style={{flex:1}}>
-                          <div style={{color:"#e2e8f0",fontWeight:"bold"}}>{user.name}</div>
-                          <div style={{fontSize:11,color:"#475569"}}>{user.email}</div>
-                        </div>
-                        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                          {/* Role badge */}
-                          <span style={{padding:"3px 10px",borderRadius:4,fontSize:10,fontWeight:"bold",
-                            background:user.role==="admin"?"rgba(245,158,11,0.1)":user.role==="pending"?"rgba(239,68,68,0.1)":"rgba(16,185,129,0.1)",
-                            color:user.role==="admin"?"#f59e0b":user.role==="pending"?"#ef4444":"#10b981",
-                            border:`1px solid ${user.role==="admin"?"rgba(245,158,11,0.3)":user.role==="pending"?"rgba(239,68,68,0.3)":"rgba(16,185,129,0.3)"}`
-                          }}>
-                            {user.role==="admin"?"👑 Admin":user.role==="pending"?"⏳ Pending":"👤 Bookkeeper"}
-                          </span>
-
-                          {/* Approve pending users */}
-                          {user.role==="pending" && user.email!==ADMIN_EMAIL && (
-                            <button className="btn" style={{...btnGreen,fontSize:10,padding:"4px 12px"}} onClick={async()=>{
-                              const updated = users.map((u,idx)=>idx===i?{...u,role:"bookkeeper",assignedClients:[]}:u);
-                              await saveUsers(updated);
-                            }}>✓ Approve</button>
-                          )}
-
-                          {/* Client assignment for bookkeepers */}
-                          {user.role==="bookkeeper" && (
-                            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                              {clients.map(c=>{
-                                const assigned = (user.assignedClients||[]).includes(c.id);
-                                return (
-                                  <button key={c.id} className="btn" onClick={async()=>{
-                                    const newClients = assigned 
-                                      ? (user.assignedClients||[]).filter(id=>id!==c.id)
-                                      : [...(user.assignedClients||[]), c.id];
-                                    const updated = users.map((u,idx)=>idx===i?{...u,assignedClients:newClients}:u);
-                                    await saveUsers(updated);
-                                  }} style={{fontSize:10,padding:"3px 10px",borderRadius:4,cursor:"pointer",
-                                    background:assigned?"rgba(59,130,246,0.15)":"transparent",
-                                    border:`1px solid ${assigned?"rgba(59,130,246,0.4)":"#1e3a5f"}`,
-                                    color:assigned?"#3b82f6":"#475569"}}>
-                                    {assigned?"✓ ":""}{c.name}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          )}
-
-                          {/* Remove user (not admin) */}
-                          {user.email!==ADMIN_EMAIL && (
-                            <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 8px",color:"#ef4444",borderColor:"rgba(239,68,68,0.3)"}} onClick={async()=>{
-                              if(confirm(`Remove ${user.name} from the system?`)){
-                                const updated = users.filter((_,idx)=>idx!==i);
-                                await saveUsers(updated);
-                              }
-                            }}>🗑️</button>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Show assigned clients */}
-                      {user.role==="bookkeeper" && (
-                        <div style={{marginTop:8,fontSize:11,color:"#334155"}}>
-                          Assigned to: {(user.assignedClients||[]).length===0?"No clients yet":
-                            (user.assignedClients||[]).map(id=>clients.find(c=>c.id===id)?.name||id).join(", ")}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-
-                  {users.length===0 && (
-                    <div style={{padding:32,textAlign:"center",color:"#334155",fontSize:13}}>
-                      No users yet. Users appear here when they first sign in with Microsoft 365.
-                    </div>
-                  )}
+              {usersData.length === 0 && (
+                <div style={{padding:32,textAlign:"center",color:"#334155",fontSize:13}}>
+                  <div style={{fontSize:28,marginBottom:12}}>👥</div>
+                  No users yet. Click "Load Users from Cloud" or add one manually above.
                 </div>
               )}
 
-              <div style={{marginTop:16,padding:14,background:"rgba(59,130,246,0.05)",border:"1px solid rgba(59,130,246,0.15)",borderRadius:8,fontSize:12,color:"#475569"}}>
-                ℹ️ Share the app URL with your team. When they sign in with their @taylorhsl.com Microsoft account for the first time, they appear here as Pending. You then approve them and assign which clients they can access.
-              </div>
-            </div>
-          );
-        })()}
+              {usersData.map((user,i)=>(
+                <div key={user.email} style={{padding:"16px 18px",borderBottom:"1px solid rgba(22,32,50,0.6)"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                    <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:"bold",fontSize:14,flexShrink:0}}>
+                      {(user.name||user.email)?.[0]?.toUpperCase()||"?"}
+                    </div>
+                    <div style={{flex:1}}>
+                      <div style={{color:"#e2e8f0",fontWeight:"bold"}}>{user.name||user.email.split("@")[0]}</div>
+                      <div style={{fontSize:11,color:"#475569"}}>{user.email}</div>
+                    </div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                      <span style={{padding:"3px 10px",borderRadius:4,fontSize:10,fontWeight:"bold",
+                        background:user.role==="admin"?"rgba(245,158,11,0.1)":user.role==="pending"?"rgba(239,68,68,0.1)":"rgba(16,185,129,0.1)",
+                        color:user.role==="admin"?"#f59e0b":user.role==="pending"?"#ef4444":"#10b981",
+                        border:`1px solid ${user.role==="admin"?"rgba(245,158,11,0.3)":user.role==="pending"?"rgba(239,68,68,0.3)":"rgba(16,185,129,0.3)"}`
+                      }}>
+                        {user.role==="admin"?"👑 Admin":user.role==="pending"?"⏳ Pending":"👤 Bookkeeper"}
+                      </span>
 
-        {/* ═══ SUPPORT ═══ */}
+                      {user.role==="pending" && (
+                        <button className="btn" style={{...btnGreen,fontSize:10,padding:"4px 12px"}} onClick={async()=>{
+                          const updated = usersData.map((u,idx)=>idx===i?{...u,role:"bookkeeper",assignedClients:[]}:u);
+                          setUsersData(updated);
+                          await kvSet(`users:${TRUSTED_DOMAIN}`, updated);
+                        }}>✓ Approve</button>
+                      )}
+
+                      {user.email!==ADMIN_EMAIL && (
+                        <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 8px",color:"#ef4444",borderColor:"rgba(239,68,68,0.3)"}} onClick={async()=>{
+                          if(confirm(`Remove ${user.name||user.email}?`)){
+                            const updated = usersData.filter((_,idx)=>idx!==i);
+                            setUsersData(updated);
+                            await kvSet(`users:${TRUSTED_DOMAIN}`, updated);
+                          }
+                        }}>🗑️</button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Client assignment */}
+                  {(user.role==="bookkeeper"||user.role==="admin") && user.email!==ADMIN_EMAIL && (
+                    <div style={{marginTop:12}}>
+                      <div style={{fontSize:10,color:"#475569",marginBottom:6}}>ASSIGNED CLIENTS:</div>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                        {clients.map(c=>{
+                          const assigned = user.assignedClients==="all" || (user.assignedClients||[]).includes(c.id);
+                          return (
+                            <button key={c.id} className="btn" onClick={async()=>{
+                              const current = user.assignedClients==="all" ? clients.map(x=>x.id) : (user.assignedClients||[]);
+                              const newClients = assigned ? current.filter(id=>id!==c.id) : [...current, c.id];
+                              const updated = usersData.map((u,idx)=>idx===i?{...u,assignedClients:newClients}:u);
+                              setUsersData(updated);
+                              await kvSet(`users:${TRUSTED_DOMAIN}`, updated);
+                            }} style={{fontSize:10,padding:"4px 12px",borderRadius:4,cursor:"pointer",
+                              background:assigned?"rgba(59,130,246,0.15)":"transparent",
+                              border:`1px solid ${assigned?"rgba(59,130,246,0.4)":"#1e3a5f"}`,
+                              color:assigned?"#3b82f6":"#475569"}}>
+                              {assigned?"✓ ":""}{c.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div style={{marginTop:16,padding:14,background:"rgba(59,130,246,0.05)",border:"1px solid rgba(59,130,246,0.15)",borderRadius:8,fontSize:12,color:"#475569"}}>
+              ℹ️ Share the app URL with your team. When they sign in with Microsoft 365 they appear here automatically. You then approve them and assign which clients they can access.
+            </div>
+          </div>
+        )}
+
+                {/* ═══ SUPPORT ═══ */}
         {view===VIEWS.SUPPORT && (
           <div style={{animation:"fadeUp 0.3s ease",maxWidth:680}}>
             <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>HELP & SUPPORT</div>
