@@ -272,6 +272,9 @@ function App() {
       if (ac) setActiveClient(ac);
     } catch{}
 
+    // Load from KV if localStorage is empty
+    loadFromKV();
+
     // Handle OAuth callbacks
     const params = new URLSearchParams(window.location.search);
     const code = params.get("code"), state = params.get("state");
@@ -345,7 +348,94 @@ function App() {
     a.download = `extract-error-logs-${new Date().toISOString().slice(0,10)}.txt`;
     a.click();
   }
-  const saveClients = (c) => { setClients(c); localStorage.setItem("extract_clients", JSON.stringify(c)); };
+  const saveClients = (c) => { 
+    setClients(c); 
+    localStorage.setItem("extract_clients", JSON.stringify(c));
+    // Also save to KV for persistence across devices
+    kvSet(`clients:${KV_USER}`, c).catch(e => console.warn("KV save failed:", e));
+  };
+
+  // ── Vercel KV (Upstash) ──────────────────────────────────────────────
+  const KV_USER = "taylorhsl"; // shared across all bookkeepers
+
+  async function kvGet(key) {
+    try {
+      const res = await fetch(`${PROXY}/api/kv`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ action: "get", key })
+      });
+      const data = await res.json();
+      if (data.result === null || data.result === undefined) return null;
+      // Upstash returns strings — parse JSON
+      try { return JSON.parse(data.result); } catch { return data.result; }
+    } catch(e) { console.warn("KV get failed:", e); return null; }
+  }
+
+  async function kvSet(key, value) {
+    try {
+      const res = await fetch(`${PROXY}/api/kv`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ action: "set", key, value: JSON.stringify(value) })
+      });
+      return await res.json();
+    } catch(e) { console.warn("KV set failed:", e); return null; }
+  }
+
+  async function kvDel(key) {
+    try {
+      await fetch(`${PROXY}/api/kv`, {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ action: "del", key })
+      });
+    } catch(e) { console.warn("KV del failed:", e); }
+  }
+
+  // Save clients to both localStorage (fast) and KV (persistent)
+  async function saveClientsKV(c) {
+    setClients(c);
+    localStorage.setItem("extract_clients", JSON.stringify(c));
+    await kvSet(`clients:${KV_USER}`, c);
+  }
+
+  // Save GL memory to both localStorage and KV
+  async function saveGLMemoryKV(clientId, memory) {
+    localStorage.setItem(`gl_memory_${clientId}`, JSON.stringify(memory));
+    await kvSet(`gl_memory:${clientId}`, memory);
+  }
+
+  // Load all data from KV on startup (if localStorage is empty)
+  async function loadFromKV() {
+    try {
+      // Check if localStorage has clients — if not load from KV
+      const localClients = localStorage.getItem("extract_clients");
+      if (!localClients || JSON.parse(localClients).length === 0) {
+        console.log("Loading clients from KV...");
+        const kvClients = await kvGet(`clients:${KV_USER}`);
+        if (kvClients && kvClients.length > 0) {
+          setClients(kvClients);
+          localStorage.setItem("extract_clients", JSON.stringify(kvClients));
+          console.log(`Restored ${kvClients.length} clients from KV`);
+          // Also restore GL memory for each client
+          for (const client of kvClients) {
+            const glMemory = await kvGet(`gl_memory:${client.id}`);
+            if (glMemory) {
+              localStorage.setItem(`gl_memory_${client.id}`, JSON.stringify(glMemory));
+              console.log(`Restored GL memory for ${client.name}`);
+            }
+            const periods = await kvGet(`periods:${client.id}`);
+            if (periods) {
+              localStorage.setItem(`closed_periods_${client.id}`, JSON.stringify(periods));
+            }
+            const processed = await kvGet(`processed:${client.id}`);
+            if (processed) {
+              localStorage.setItem(`processed_files_${client.id}`, JSON.stringify(processed));
+            }
+          }
+          alert("✅ Data restored from cloud backup!");
+        }
+      }
+    } catch(e) { console.warn("KV load failed:", e); }
+  }
 
   // ── QBO OAuth ──
   async function connectQBO(client) {
@@ -780,6 +870,7 @@ function App() {
     const periods = getClosedPeriods(clientId);
     periods[periodKey] = { closedOn: closedDate, closedAt: new Date().toISOString() };
     localStorage.setItem(`closed_periods_${clientId}`, JSON.stringify(periods));
+    kvSet(`periods:${clientId}`, periods).catch(e => console.warn("KV periods save failed:", e));
   }
 
   function reopenPeriod(clientId, periodKey) {
@@ -931,6 +1022,8 @@ function App() {
 
   function saveGLMemory(clientId, memory) {
     localStorage.setItem(`gl_memory_${clientId}`, JSON.stringify(memory));
+    // Also save to KV for persistence
+    kvSet(`gl_memory:${clientId}`, memory).catch(e => console.warn("KV GL save failed:", e));
   }
 
   function learnGLRule(clientId, vendor, txType, keywords, accountName) {
@@ -1022,6 +1115,7 @@ function App() {
     const processed = getProcessedFiles(clientId);
     processed[fileId] = { fileName, qboId, txType, processedAt: new Date().toISOString() };
     localStorage.setItem(`processed_files_${clientId}`, JSON.stringify(processed));
+    kvSet(`processed:${clientId}`, processed).catch(e => console.warn("KV processed save failed:", e));
   }
 
   function isFileProcessed(clientId, fileId) {
@@ -1844,6 +1938,24 @@ ${text.slice(0,12000)}`}]})});
               </div>
               <div style={{display:"flex",gap:8}}>
                 <button className="btn" style={btnSecondary} onClick={()=>document.getElementById("import-client").click()}>📥 Import Client</button>
+              <button className="btn" style={{...btnSecondary,color:"#10b981",borderColor:"rgba(16,185,129,0.3)"}} onClick={async()=>{
+                const kvClients = await kvGet(`clients:${KV_USER}`);
+                if (kvClients && kvClients.length > 0) {
+                  setClients(kvClients);
+                  localStorage.setItem("extract_clients", JSON.stringify(kvClients));
+                  for (const c of kvClients) {
+                    const glMemory = await kvGet(`gl_memory:${c.id}`);
+                    if (glMemory) localStorage.setItem(`gl_memory_${c.id}`, JSON.stringify(glMemory));
+                    const periods = await kvGet(`periods:${c.id}`);
+                    if (periods) localStorage.setItem(`closed_periods_${c.id}`, JSON.stringify(periods));
+                    const processed = await kvGet(`processed:${c.id}`);
+                    if (processed) localStorage.setItem(`processed_files_${c.id}`, JSON.stringify(processed));
+                  }
+                  alert(`✅ Restored ${kvClients.length} client(s) and all GL learning from cloud!`);
+                } else {
+                  alert("No cloud backup found. Please sync data first using the ☁️ Sync button on each client.");
+                }
+              }}>☁️ Restore from Cloud</button>
                 <button className="btn" style={btnPrimary} onClick={()=>{setEditingClient({id:iid(),name:"",businessType:"Other",qboClientId:"",qboClientSecret:"",defaultTxType:"Bill",pettyCashAccount:"Petty Cash",customRules:"",chartOfAccounts:[]});setView(VIEWS.EDIT_CLIENT);}}>+ Add Client</button>
               </div>
             </div>
@@ -1969,6 +2081,14 @@ ${text.slice(0,12000)}`}]})});
                     )}
                     <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={()=>{setActiveClient(client.id);setShowPeriods(true);}}>📅 Periods</button>
                     <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={()=>exportClient(client)}>📤 Export</button>
+                    <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px",color:"#10b981",borderColor:"rgba(16,185,129,0.3)"}} onClick={async()=>{
+                      // Force sync everything to KV
+                      await kvSet(`clients:${KV_USER}`, clients);
+                      await kvSet(`gl_memory:${client.id}`, getGLMemory(client.id));
+                      await kvSet(`periods:${client.id}`, getClosedPeriods(client.id));
+                      await kvSet(`processed:${client.id}`, getProcessedFiles(client.id));
+                      alert("✅ All data synced to cloud!");
+                    }}>☁️ Sync</button>
                     <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={()=>{
                       setActiveClient(client.id);
                       setEditingClient({...client});
