@@ -264,7 +264,7 @@ function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [usersData, setUsersData] = useState([]);
   const [usersLoaded, setUsersLoaded] = useState(false);
-  const [newUserEmail, setNewUserEmail] = useState(""); // {email, name, role, assignedClients}
+  const [newUserEmail, setNewUserEmail] = useState("");
   const [userLoading, setUserLoading] = useState(false);
   const fileInputRef = useRef();
 
@@ -2714,57 +2714,50 @@ ${text.slice(0,12000)}`}]})});
       </div>
 
         {/* ═══ HISTORY ═══ */}
-        {view===VIEWS.HISTORY && (()=>{
-          const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth()-3);
-          const historyClient = activeClient; // Uses currently selected client
-          
-          const historyData = historyClient ? Object.entries(getProcessedFiles(historyClient))
-            .filter(([id, rec]) => new Date(rec.processedAt) > threeMonthsAgo)
-            .sort((a, b) => new Date(b[1].processedAt) - new Date(a[1].processedAt))
-            : [];
-
-          const qboEnv = currentClient?.qboEnv || "sandbox";
-          const qboBase = qboEnv === "production" 
-            ? "https://app.qbo.intuit.com/app" 
-            : "https://app.sandbox.qbo.intuit.com/app";
-
-          return (
-            <div style={{animation:"fadeUp 0.3s ease"}}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24,flexWrap:"wrap",gap:12}}>
-                <div>
-                  <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>DOCUMENT HISTORY</div>
-                  <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9"}}>{currentClient?.name||"No client selected"} — Last 3 Months</div>
-                </div>
+        {view===VIEWS.HISTORY && (
+          <div style={{animation:"fadeUp 0.3s ease"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24,flexWrap:"wrap",gap:12}}>
+              <div>
+                <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>DOCUMENT HISTORY</div>
+                <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9"}}>{currentClient?.name||"No client selected"} — Last 3 Months</div>
               </div>
+            </div>
 
-              {!historyClient && (
-                <div style={{...card,padding:40,textAlign:"center",color:"#475569"}}>
-                  <div style={{fontSize:32,marginBottom:12}}>📋</div>
-                  <div>Please select a client from the dropdown at the top</div>
-                </div>
-              )}
+            {!activeClient && (
+              <div style={{...card,padding:40,textAlign:"center",color:"#475569"}}>
+                <div style={{fontSize:32,marginBottom:12}}>📋</div>
+                <div>Please select a client from the dropdown at the top</div>
+              </div>
+            )}
 
-              {historyClient && historyData.length === 0 && (
+            {activeClient && (()=>{
+              const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth()-3);
+              const historyData = Object.entries(getProcessedFiles(activeClient))
+                .filter(([id, rec]) => new Date(rec.processedAt) > threeMonthsAgo)
+                .sort((a, b) => new Date(b[1].processedAt) - new Date(a[1].processedAt));
+              const qboEnv = currentClient?.qboEnv || "sandbox";
+              const qboBase = qboEnv === "production" ? "https://app.qbo.intuit.com/app" : "https://app.sandbox.qbo.intuit.com/app";
+
+              if (historyData.length === 0) return (
                 <div style={{...card,padding:40,textAlign:"center",color:"#475569"}}>
                   <div style={{fontSize:32,marginBottom:12}}>📭</div>
-                  <div>No documents processed in the last 3 months for {currentClient?.name}</div>
+                  <div>No documents processed in the last 3 months</div>
                 </div>
-              )}
+              );
 
-              {historyClient && historyData.length > 0 && (
+              return (
                 <div style={{...card,overflow:"hidden"}}>
-                  <div style={{padding:"12px 18px",borderBottom:"1px solid #162032",display:"flex",gap:20,fontSize:11,color:"#334155",letterSpacing:"0.1em"}}>
+                  <div style={{padding:"12px 18px",borderBottom:"1px solid #162032",display:"flex",gap:16,fontSize:11,color:"#334155",letterSpacing:"0.1em"}}>
                     <span style={{flex:2}}>DOCUMENT</span>
                     <span style={{flex:1}}>VENDOR</span>
                     <span style={{flex:1,textAlign:"right"}}>AMOUNT</span>
                     <span style={{flex:1}}>DATE</span>
                     <span style={{flex:1}}>TYPE</span>
-                    <span style={{flex:1}}>QBO REF</span>
                     <span style={{flex:1}}>POSTED BY</span>
-                    <span style={{width:80}}>ACTIONS</span>
+                    <span style={{width:80}}>QBO</span>
                   </div>
                   {historyData.map(([fileId, rec])=>(
-                    <div key={fileId} className="rh" style={{padding:"12px 18px",borderBottom:"1px solid rgba(22,32,50,0.6)",display:"flex",alignItems:"center",gap:20,fontSize:12}}>
+                    <div key={fileId} className="rh" style={{padding:"12px 18px",borderBottom:"1px solid rgba(22,32,50,0.6)",display:"flex",alignItems:"center",gap:16,fontSize:12}}>
                       <div style={{flex:2,color:"#94a3b8",fontSize:11,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={rec.fileName}>
                         📄 {rec.fileName}
                       </div>
@@ -2784,17 +2777,13 @@ ${text.slice(0,12000)}`}]})});
                           border:`1px solid ${rec.txType==="Bill"?"rgba(59,130,246,0.3)":"rgba(16,185,129,0.3)"}`
                         }}>{rec.txType||"—"}</span>
                       </div>
-                      <div style={{flex:1,color:"#475569",fontSize:11}}>
-                        {rec.voucherNumber&&<div style={{color:"#3b82f6"}}>🎫 {rec.voucherNumber}</div>}
-                        {rec.taxInvoiceNumber&&<div style={{color:"#f59e0b",fontSize:10}}>📋 {rec.taxInvoiceNumber}</div>}
+                      <div style={{flex:1,fontSize:11,color:"#475569"}}>
+                        {rec.postedBy||"—"}
                       </div>
-                      <div style={{flex:1,fontSize:10,color:"#475569"}}>
-                        {rec.postedBy && <div title={rec.postedByEmail}>👤 {rec.postedBy}</div>}
-                      </div>
-                      <div style={{width:80,display:"flex",gap:6}}>
+                      <div style={{width:80}}>
                         {rec.qboId && (
                           <a href={`${qboBase}/expense?txnId=${rec.qboId}`} target="_blank"
-                            style={{padding:"3px 8px",background:"rgba(59,130,246,0.1)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:4,fontSize:10,color:"#3b82f6",textDecoration:"none",whiteSpace:"nowrap"}}>
+                            style={{padding:"3px 8px",background:"rgba(59,130,246,0.1)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:4,fontSize:10,color:"#3b82f6",textDecoration:"none"}}>
                             QBO →
                           </a>
                         )}
@@ -2806,12 +2795,12 @@ ${text.slice(0,12000)}`}]})});
                     <span>Total: THB {historyData.reduce((s,[,r])=>s+(r.amount||0),0).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
                   </div>
                 </div>
-              )}
-            </div>
-          );
-        })()}
+              );
+            })()}
+          </div>
+        )}
 
-        {/* ═══ USERS ═══ */}
+                {/* ═══ USERS ═══ */}
         {view===VIEWS.USERS && (
           <div style={{animation:"fadeUp 0.3s ease",maxWidth:800}}>
             <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>USER MANAGEMENT</div>
