@@ -35,7 +35,7 @@ const GRAPH_SCOPES = ["Files.Read.All","Sites.Read.All","offline_access","openid
 const QBO_SCOPES = "com.intuit.quickbooks.accounting openid profile email phone address";
 const QBO_SANDBOX_BASE = "https://sandbox-quickbooks.api.intuit.com/v3/company";
 
-const VIEWS = { HOME:"home", CLIENTS:"clients", EDIT_CLIENT:"edit_client", PROCESS:"process", SETTINGS:"settings", SUPPORT:"support" };
+const VIEWS = { HOME:"home", CLIENTS:"clients", EDIT_CLIENT:"edit_client", PROCESS:"process", HISTORY:"history", SETTINGS:"settings", SUPPORT:"support" };
 const STAGES = { IDLE:"idle", EXTRACTING:"extracting", ANALYZING:"analyzing", DONE:"done", POSTING:"posting", BROWSING:"browsing", CONNECTING:"connecting" };
 
 const BUSINESS_TYPES = ["Construction","Trading","Hospitality","Professional Services","Manufacturing","Retail","Non-Profit","Real Estate","Other"];
@@ -1111,9 +1111,18 @@ function App() {
     try { return JSON.parse(localStorage.getItem(`processed_files_${clientId}`) || "{}"); } catch { return {}; }
   }
 
-  function markFileProcessed(clientId, fileId, fileName, qboId, txType) {
+  function markFileProcessed(clientId, fileId, fileName, qboId, txType, extraData={}) {
     const processed = getProcessedFiles(clientId);
-    processed[fileId] = { fileName, qboId, txType, processedAt: new Date().toISOString() };
+    processed[fileId] = { 
+      fileName, qboId, txType, 
+      processedAt: new Date().toISOString(),
+      vendor: extraData.vendor || "",
+      amount: extraData.amount || 0,
+      currency: extraData.currency || "THB",
+      documentDate: extraData.documentDate || "",
+      taxInvoiceNumber: extraData.taxInvoiceNumber || "",
+      voucherNumber: extraData.voucherNumber || "",
+    };
     localStorage.setItem(`processed_files_${clientId}`, JSON.stringify(processed));
     kvSet(`processed:${clientId}`, processed).catch(e => console.warn("KV processed save failed:", e));
   }
@@ -1233,6 +1242,8 @@ function App() {
           "none": "❓ No suggestion"
         }[suggestion.source] || "🤖 AI suggested";
 
+        // If high confidence rule or learned → show quick confirm banner first
+        // User can accept in one click or open full modal to change
         return new Promise((resolve) => {
           glResolveRef.current = resolve;
           setGlModal({
@@ -1242,6 +1253,7 @@ function App() {
             suggestionSource: sourceLabel,
             suggestionConfidence: suggestion.confidence,
             accounts: expenseAccounts,
+            quickConfirm: suggestion.confidence >= 90, // Show quick confirm for high confidence
           });
         });
       };
@@ -1490,7 +1502,14 @@ function App() {
 
       // Mark as processed and move to Done folder
       if (result.fileId) {
-        markFileProcessed(client.id, result.fileId, result.file, txId, txType);
+        markFileProcessed(client.id, result.fileId, result.file, txId, txType, {
+          vendor: ex.vendor,
+          amount: ex.totalAmount,
+          currency: ex.currency,
+          documentDate: ex.documentDate,
+          taxInvoiceNumber: ex.taxInvoiceNumber,
+          voucherNumber: ex.voucherNumber,
+        });
         if (graphToken && result.driveId && result.folderPath) {
           await moveFileToDone(result.fileId, result.driveId, result.folderPath, client, graphToken);
         }
@@ -1901,7 +1920,7 @@ ${text.slice(0,12000)}`}]})});
 
         {/* Nav */}
         <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
-          {[{v:VIEWS.PROCESS,l:"📄 Process"},{v:VIEWS.CLIENTS,l:"🏢 Clients"},{v:VIEWS.SETTINGS,l:"⚙ Settings"},{v:VIEWS.SUPPORT,l:"❓ Support"}].map(({v,l})=>(
+          {[{v:VIEWS.PROCESS,l:"📄 Process"},{v:VIEWS.CLIENTS,l:"🏢 Clients"},{v:VIEWS.HISTORY,l:"📋 History"},{v:VIEWS.SETTINGS,l:"⚙ Settings"},{v:VIEWS.SUPPORT,l:"❓ Support"}].map(({v,l})=>(
             <button key={v} onClick={()=>setView(v)} style={{...btnSecondary,borderColor:view===v?"#3b82f6":"#1e3a5f",color:view===v?"#3b82f6":"#64748b"}}>{l}</button>
           ))}
           <input type="file" id="import-client" accept=".json" onChange={importClient} style={{display:"none"}}/>
@@ -2538,6 +2557,100 @@ ${text.slice(0,12000)}`}]})});
         )}
       </div>
 
+        {/* ═══ HISTORY ═══ */}
+        {view===VIEWS.HISTORY && (()=>{
+          const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth()-3);
+          const historyClient = activeClient; // Uses currently selected client
+          
+          const historyData = historyClient ? Object.entries(getProcessedFiles(historyClient))
+            .filter(([id, rec]) => new Date(rec.processedAt) > threeMonthsAgo)
+            .sort((a, b) => new Date(b[1].processedAt) - new Date(a[1].processedAt))
+            : [];
+
+          const qboEnv = currentClient?.qboEnv || "sandbox";
+          const qboBase = qboEnv === "production" 
+            ? "https://app.qbo.intuit.com/app" 
+            : "https://app.sandbox.qbo.intuit.com/app";
+
+          return (
+            <div style={{animation:"fadeUp 0.3s ease"}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24,flexWrap:"wrap",gap:12}}>
+                <div>
+                  <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>DOCUMENT HISTORY</div>
+                  <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9"}}>{currentClient?.name||"No client selected"} — Last 3 Months</div>
+                </div>
+              </div>
+
+              {!historyClient && (
+                <div style={{...card,padding:40,textAlign:"center",color:"#475569"}}>
+                  <div style={{fontSize:32,marginBottom:12}}>📋</div>
+                  <div>Please select a client from the dropdown at the top</div>
+                </div>
+              )}
+
+              {historyClient && historyData.length === 0 && (
+                <div style={{...card,padding:40,textAlign:"center",color:"#475569"}}>
+                  <div style={{fontSize:32,marginBottom:12}}>📭</div>
+                  <div>No documents processed in the last 3 months for {currentClient?.name}</div>
+                </div>
+              )}
+
+              {historyClient && historyData.length > 0 && (
+                <div style={{...card,overflow:"hidden"}}>
+                  <div style={{padding:"12px 18px",borderBottom:"1px solid #162032",display:"flex",gap:20,fontSize:11,color:"#334155",letterSpacing:"0.1em"}}>
+                    <span style={{flex:2}}>DOCUMENT</span>
+                    <span style={{flex:1}}>VENDOR</span>
+                    <span style={{flex:1,textAlign:"right"}}>AMOUNT</span>
+                    <span style={{flex:1}}>DATE</span>
+                    <span style={{flex:1}}>TYPE</span>
+                    <span style={{flex:1}}>QBO REF</span>
+                    <span style={{width:80}}>ACTIONS</span>
+                  </div>
+                  {historyData.map(([fileId, rec])=>(
+                    <div key={fileId} className="rh" style={{padding:"12px 18px",borderBottom:"1px solid rgba(22,32,50,0.6)",display:"flex",alignItems:"center",gap:20,fontSize:12}}>
+                      <div style={{flex:2,color:"#94a3b8",fontSize:11,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={rec.fileName}>
+                        📄 {rec.fileName}
+                      </div>
+                      <div style={{flex:1,color:"#e2e8f0",fontWeight:"bold",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {rec.vendor||"—"}
+                      </div>
+                      <div style={{flex:1,textAlign:"right",color:"#f87171",fontFamily:"monospace",fontWeight:"bold"}}>
+                        {rec.currency||"THB"} {(rec.amount||0).toLocaleString(undefined,{minimumFractionDigits:2})}
+                      </div>
+                      <div style={{flex:1,color:"#64748b"}}>
+                        {rec.documentDate||new Date(rec.processedAt).toLocaleDateString()}
+                      </div>
+                      <div style={{flex:1}}>
+                        <span style={{padding:"2px 8px",borderRadius:4,fontSize:10,
+                          background:rec.txType==="Bill"?"rgba(59,130,246,0.1)":"rgba(16,185,129,0.1)",
+                          color:rec.txType==="Bill"?"#3b82f6":"#10b981",
+                          border:`1px solid ${rec.txType==="Bill"?"rgba(59,130,246,0.3)":"rgba(16,185,129,0.3)"}`
+                        }}>{rec.txType||"—"}</span>
+                      </div>
+                      <div style={{flex:1,color:"#475569",fontSize:11}}>
+                        {rec.voucherNumber&&<div style={{color:"#3b82f6"}}>🎫 {rec.voucherNumber}</div>}
+                        {rec.taxInvoiceNumber&&<div style={{color:"#f59e0b",fontSize:10}}>📋 {rec.taxInvoiceNumber}</div>}
+                      </div>
+                      <div style={{width:80,display:"flex",gap:6}}>
+                        {rec.qboId && (
+                          <a href={`${qboBase}/expense?txnId=${rec.qboId}`} target="_blank"
+                            style={{padding:"3px 8px",background:"rgba(59,130,246,0.1)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:4,fontSize:10,color:"#3b82f6",textDecoration:"none",whiteSpace:"nowrap"}}>
+                            QBO →
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{padding:"10px 18px",borderTop:"1px solid #162032",display:"flex",justifyContent:"space-between",fontSize:11,color:"#475569"}}>
+                    <span>{historyData.length} documents</span>
+                    <span>Total: THB {historyData.reduce((s,[,r])=>s+(r.amount||0),0).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
         {/* ═══ SUPPORT ═══ */}
         {view===VIEWS.SUPPORT && (
           <div style={{animation:"fadeUp 0.3s ease",maxWidth:680}}>
@@ -2704,9 +2817,29 @@ ${text.slice(0,12000)}`}]})});
               {glModal.vendor&&<div style={{fontSize:11,color:"#475569"}}>Vendor: {glModal.vendor}</div>}
             </div>
 
-            {/* Suggestion */}
-            {glModal.suggestion && (
-              <div style={{padding:"10px 14px",background:"rgba(59,130,246,0.08)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:8,marginBottom:16,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            {/* Quick confirm for high confidence suggestions */}
+            {glModal.suggestion && glModal.quickConfirm && (
+              <div style={{padding:"14px 16px",background:"rgba(16,185,129,0.08)",border:"1px solid rgba(16,185,129,0.25)",borderRadius:10,marginBottom:16}}>
+                <div style={{fontSize:10,color:"#10b981",marginBottom:6,letterSpacing:"0.1em"}}>{glModal.suggestionSource} — {glModal.suggestionConfidence}% confidence</div>
+                <div style={{fontSize:15,color:"#e2e8f0",fontWeight:"bold",marginBottom:12}}>{glModal.suggestion}</div>
+                <div style={{display:"flex",gap:10}}>
+                  <button onClick={()=>{
+                    const acc = glModal.accounts.find(a=>a.name===glModal.suggestion);
+                    if(acc){glResolveRef.current?.({value:acc.id,name:acc.name});glResolveRef.current=null;setGlModal(null);}
+                  }} style={{flex:1,padding:"10px",background:"linear-gradient(135deg,#10b981,#059669)",border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:"bold"}}>
+                    ✓ Confirm
+                  </button>
+                  <button onClick={()=>setGlModal({...glModal,quickConfirm:false})}
+                    style={{padding:"10px 16px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:8,color:"#64748b",cursor:"pointer",fontSize:12}}>
+                    Change
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Suggestion for lower confidence */}
+            {glModal.suggestion && !glModal.quickConfirm && (
+              <div style={{padding:"10px 14px",background:"rgba(59,130,246,0.08)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:8,marginBottom:12,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div>
                   <div style={{fontSize:10,color:"#3b82f6",marginBottom:3}}>{glModal.suggestionSource} ({glModal.suggestionConfidence}% confidence)</div>
                   <div style={{fontSize:13,color:"#e2e8f0",fontWeight:"bold"}}>{glModal.suggestion}</div>
@@ -2720,8 +2853,9 @@ ${text.slice(0,12000)}`}]})});
               </div>
             )}
 
-            {/* Search and full list */}
-            <div style={{fontSize:11,color:"#475569",marginBottom:8}}>Or select from all accounts:</div>
+            {/* Search and full list — only shown when not quick confirm */}
+            {!glModal.quickConfirm && <div style={{fontSize:11,color:"#475569",marginBottom:8}}>Or select from all accounts:</div>}
+            {glModal.quickConfirm && <div style={{fontSize:11,color:"#475569",marginBottom:8,textAlign:"center"}}>Click Change to select a different account</div>}
             <input
               id="gl-search"
               placeholder="Search accounts..."
@@ -2733,7 +2867,7 @@ ${text.slice(0,12000)}`}]})});
               }}
               style={{width:"100%",padding:"8px 12px",background:"rgba(22,32,50,0.6)",border:"1px solid #1e3a5f",borderRadius:7,color:"#e2e8f0",fontSize:12,fontFamily:"monospace",marginBottom:8}}
             />
-            <div style={{flex:1,overflow:"auto",border:"1px solid #162032",borderRadius:8}}>
+            {!glModal.quickConfirm && <div style={{flex:1,overflow:"auto",border:"1px solid #162032",borderRadius:8}}>
               {[...(glModal?.accounts||[])].sort((a,b)=>{
                 const order = {"Expense":0,"Cost of Goods Sold":1,"Bank":2,"Other Current Asset":3,"Fixed Asset":4,"Other Asset":5,"Other Current Liability":6,"Accounts Payable":7,"Other Expense":8};
                 return (order[a.type]??9) - (order[b.type]??9) || a.name.localeCompare(b.name);
@@ -2748,7 +2882,7 @@ ${text.slice(0,12000)}`}]})});
                   {acc.name===glModal.suggestion&&<span style={{fontSize:10,color:"#3b82f6"}}>★ suggested</span>}
                 </div>
               ))}
-            </div>
+            </div>}
 
             <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:16}}>
               <button onClick={()=>{glResolveRef.current?.(null);glResolveRef.current=null;setGlModal(null);}} style={{padding:"9px 18px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:7,color:"#64748b",cursor:"pointer",fontSize:12,fontFamily:"monospace"}}>Cancel — Skip Document</button>
