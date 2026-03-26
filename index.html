@@ -1543,7 +1543,12 @@ function App() {
       text += pageLabel + " ---\n";
       text+=content.items.map(it=>it.str).join(" ")+"\n";
     }
-    const hasText=text.trim().replace(/\s+/g,"").length>80;
+    // Check if text is actually readable (not garbled Thai font encoding)
+    const cleanText = text.trim().replace(/\s+/g,"");
+    // Must have enough readable ASCII/Thai characters — garbled PDFs often have symbols only
+    const readableChars = (text.match(/[a-zA-Z0-9ก-๙\s\-\/\.,:฿]/g)||[]).length;
+    const hasText = cleanText.length > 200 && readableChars > 100;
+    console.log("Text extraction:", cleanText.length, "chars,", readableChars, "readable — using", hasText?"text":"OCR");
     const client = clients.find(c=>c.id===activeClient);
     // Limit COA to expense/liability accounts only to avoid stack overflow with large lists
     const allCoa = client?.chartOfAccounts || [];
@@ -1592,9 +1597,14 @@ function App() {
   async function analyzeText(text, fileName, systemPrompt) {
     const headers={"Content-Type":"application/json"};
     if(settings.apiKey) headers["x-api-key"]=settings.apiKey;
-    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,temperature:0,system:systemPrompt,messages:[{role:"user",content:`Extract accounting data (file: ${fileName}):\n\n${text.slice(0,12000)}`}]})});
+    const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,temperature:0,system:systemPrompt,messages:[{role:"user",content:`Extract accounting data (file: ${fileName}):
+
+${text.slice(0,12000)}`}]})});
     const d=await res.json();
-    try{return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim());}catch{return null;}
+    console.log("Anthropic text response:", JSON.stringify(d).slice(0,500));
+    if(d.error) { console.error("Anthropic error:", d.error); return null; }
+    try{return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim());}
+    catch(e){console.error("JSON parse error:", e, "Raw:", d.content?.[0]?.text?.slice(0,200)); return null;}
   }
 
   async function analyzeImages(imageContents, systemPrompt) {
@@ -1602,7 +1612,10 @@ function App() {
     if(settings.apiKey) headers["x-api-key"]=settings.apiKey;
     const res=await fetch(`${PROXY}/api/anthropic`,{method:"POST",headers,body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,temperature:0,system:systemPrompt,messages:[{role:"user",content:imageContents}]})});
     const d=await res.json();
-    try{return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim());}catch{return null;}
+    console.log("Anthropic image response:", JSON.stringify(d).slice(0,500));
+    if(d.error) { console.error("Anthropic error:", d.error); return null; }
+    try{return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim());}
+    catch(e){console.error("JSON parse error:", e, "Raw:", d.content?.[0]?.text?.slice(0,200)); return null;}
   }
 
   async function processFiles(fileList) {
