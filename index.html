@@ -286,6 +286,19 @@ function App() {
       const savedUser = localStorage.getItem("extract_user");
       if (savedUser) setCurrentUser(JSON.parse(savedUser));
     } catch(e) {}
+    // Load shared MS settings from KV if not in localStorage
+    try {
+      const localSettings = JSON.parse(localStorage.getItem("extract_settings")||"{}");
+      if (!localSettings.msClientId) {
+        const kvSettings = await kvGet(`settings:${TRUSTED_DOMAIN}`);
+        if (kvSettings?.msClientId) {
+          const merged = {...localSettings, ...kvSettings};
+          setSettings(merged);
+          localStorage.setItem("extract_settings", JSON.stringify(merged));
+          console.log("Loaded shared MS settings from cloud");
+        }
+      }
+    } catch(e) {}
 
     // Handle OAuth callbacks
     const params = new URLSearchParams(window.location.search);
@@ -325,7 +338,13 @@ function App() {
     }
   }, []);
 
-  const saveSettings = (s) => { setSettings(s); localStorage.setItem("extract_settings", JSON.stringify(s)); alert("✅ Settings saved successfully!"); };
+  const saveSettings = async (s) => { 
+    setSettings(s); 
+    localStorage.setItem("extract_settings", JSON.stringify(s)); 
+    // Save MS settings to KV so all users get them automatically
+    await kvSet(`settings:${TRUSTED_DOMAIN}`, { msClientId: s.msClientId, msTenantId: s.msTenantId });
+    alert("✅ Settings saved successfully!"); 
+  };
 
   // ── Error Logging ─────────────────────────────────────────────────────
   function logError(context, error, extraData = {}) {
