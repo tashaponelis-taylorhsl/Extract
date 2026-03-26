@@ -1547,7 +1547,9 @@ function App() {
     const cleanText = text.trim().replace(/\s+/g,"");
     // Must have enough readable ASCII/Thai characters — garbled PDFs often have symbols only
     const readableChars = (text.match(/[a-zA-Z0-9ก-๙\s\-\/\.,:฿]/g)||[]).length;
-    const hasText = cleanText.length > 200 && readableChars > 100;
+    // Force OCR if text is too short — means most pages are scanned images
+    // A 3-page PDF with only 232 chars means page 2+ are scanned, not text
+    const hasText = cleanText.length > 800 && readableChars > 400;
     console.log("Text extraction:", cleanText.length, "chars,", readableChars, "readable — using", hasText?"text":"OCR");
     const client = clients.find(c=>c.id===activeClient);
     // Limit COA to expense/liability accounts only to avoid stack overflow with large lists
