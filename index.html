@@ -2009,7 +2009,7 @@ ${text.slice(0,12000)}`}]})});
 
         {/* Nav */}
         <div style={{marginLeft: currentUser ? 16 : "auto",display:"flex",gap:8,alignItems:"center"}}>
-          {[{v:VIEWS.PROCESS,l:"📄 Process"},{v:VIEWS.CLIENTS,l:"🏢 Clients"},{v:VIEWS.HISTORY,l:"📋 History"},...(currentUser?.role==="admin"?[{v:VIEWS.USERS,l:"👥 Users"}]:[]),{v:VIEWS.SETTINGS,l:"⚙ Settings"},{v:VIEWS.SUPPORT,l:"❓ Support"}].map(({v,l})=>(
+          {[{v:VIEWS.PROCESS,l:"📄 Process"},{v:VIEWS.CLIENTS,l:"🏢 Clients"},{v:VIEWS.HISTORY,l:"📋 History"},{v:VIEWS.USERS,l:"👥 Users"},{v:VIEWS.SETTINGS,l:"⚙ Settings"},{v:VIEWS.SUPPORT,l:"❓ Support"}].map(({v,l})=>(
             <button key={v} onClick={()=>setView(v)} style={{...btnSecondary,borderColor:view===v?"#3b82f6":"#1e3a5f",color:view===v?"#3b82f6":"#64748b"}}>{l}</button>
           ))}
           <input type="file" id="import-client" accept=".json" onChange={importClient} style={{display:"none"}}/>
@@ -2789,7 +2789,7 @@ ${text.slice(0,12000)}`}]})});
         })()}
 
         {/* ═══ USERS ═══ */}
-        {view===VIEWS.USERS && currentUser?.role==="admin" && (()=>{
+        {view===VIEWS.USERS && (()=>{
           const [users, setUsers] = React.useState([]);
           const [loading, setLoading] = React.useState(true);
 
