@@ -428,9 +428,10 @@ function App() {
 
   // Save clients to both localStorage (fast) and KV (persistent)
   async function saveClientsKV(c) {
-    setClients(c);
-    localStorage.setItem("extract_clients", JSON.stringify(c));
-    await kvSet(`clients:${KV_USER}`, c);
+    const safeC = Array.isArray(c) ? c : [];
+    setClients(safeC);
+    localStorage.setItem("extract_clients", JSON.stringify(safeC));
+    await kvSet(`clients:${KV_USER}`, safeC);
   }
 
   // Save GL memory to both localStorage and KV
@@ -540,7 +541,7 @@ function App() {
     if (currentUser.role === "pending") return [];
     // Bookkeeper — only assigned clients
     const assigned = currentUser.assignedClients || [];
-    return clients.filter(c => assigned.includes(c.id));
+    return safe.filter(c => assigned.includes(c.id));
   }
 
   // ── QBO OAuth ──
@@ -1784,7 +1785,7 @@ function App() {
     // A 3-page PDF with only 232 chars means page 2+ are scanned, not text
     const hasText = cleanText.length > 800 && readableChars > 400;
     console.log("Text extraction:", cleanText.length, "chars,", readableChars, "readable — using", hasText?"text":"OCR");
-    const client = clients.find(c=>c.id===activeClient);
+    const client = safeClients.find(c=>c.id===activeClient);
     // Limit COA to expense/liability accounts only to avoid stack overflow with large lists
     const allCoa = client?.chartOfAccounts || [];
     // Use ALL accounts for AI classification - no filtering
@@ -1921,7 +1922,7 @@ ${text.slice(0,12000)}`}]})});
           setStage(msg.includes("OCR")||msg.includes("vision")?STAGES.ANALYZING:STAGES.EXTRACTING);
         });
         // Override transaction type based on folder name
-        const detectedType = detectTxTypeFromFolder(folderPath, clients.find(c=>c.id===activeClient));
+        const detectedType = detectTxTypeFromFolder(folderPath, safeClients.find(c=>c.id===activeClient));
         if (extracted && detectedType) extracted.transactionType = detectedType;
         newResults.push({
           file: file.name, extracted, fileData: b64, source: "teams",
@@ -1982,7 +1983,8 @@ ${text.slice(0,12000)}`}]})});
     reader.readAsText(file);
   };
 
-  const currentClient=clients.find(c=>c.id===activeClient);
+  const safeClients = Array.isArray(clients) ? clients : [];
+  const currentClient=safeClients.find(c=>c.id===activeClient);
 
   // ── Styles ──
   const card={background:"rgba(13,20,35,0.9)",border:"1px solid #162032",borderRadius:12,overflow:"hidden"};
@@ -2070,7 +2072,7 @@ ${text.slice(0,12000)}`}]})});
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24}}>
               <div>
                 <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>CLIENT MANAGEMENT</div>
-                <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9"}}>{clients.length} Client{clients.length!==1?"s":""} Configured</div>
+                <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9"}}>{safeClients.length} Client{safeClients.length!==1?"s":""} Configured</div>
               </div>
               <div style={{display:"flex",gap:8}}>
                 <button className="btn" style={btnSecondary} onClick={()=>document.getElementById("import-client").click()}>📥 Import Client</button>
@@ -2109,7 +2111,7 @@ ${text.slice(0,12000)}`}]})});
               </div>
             </div>
 
-            {clients.length===0 && (
+            {safeClients.length===0 && (
               <div style={{...card,padding:40,textAlign:"center",color:"#475569"}}>
                 <div style={{fontSize:32,marginBottom:12}}>🏢</div>
                 <div style={{fontSize:14,marginBottom:8}}>No clients configured yet</div>
@@ -2117,7 +2119,7 @@ ${text.slice(0,12000)}`}]})});
               </div>
             )}
 
-            {clients.map(client=>(
+            {safeClients.map(client=>(
               <div key={client.id} style={{...card,marginBottom:16}}>
                 <div style={{padding:"16px 20px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap"}}>
                   <div style={{width:40,height:40,borderRadius:8,background:"linear-gradient(135deg,#3b82f6,#06b6d4)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"bold",color:"#fff",fontSize:16,flexShrink:0}}>
@@ -2647,7 +2649,7 @@ ${text.slice(0,12000)}`}]})});
                                   </td>
                                   <td style={{padding:"10px 14px"}}>
                                     <button onClick={()=>{
-                                      const accounts = clients.find(c=>c.id===activeClient)?.chartOfAccounts||[];
+                                      const accounts = safeClients.find(c=>c.id===activeClient)?.chartOfAccounts||[];
                                       glResolveRef.current = (acc) => {
                                         if (acc) {
                                           // Update the line account in results
@@ -2919,11 +2921,11 @@ ${text.slice(0,12000)}`}]})});
                     <div style={{marginTop:12}}>
                       <div style={{fontSize:10,color:"#475569",marginBottom:6}}>ASSIGNED CLIENTS:</div>
                       <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                        {clients.map(c=>{
+                        {safeClients.map(c=>{
                           const assigned = user.assignedClients==="all" || (user.assignedClients||[]).includes(c.id);
                           return (
                             <button key={c.id} className="btn" onClick={async()=>{
-                              const current = user.assignedClients==="all" ? clients.map(x=>x.id) : (user.assignedClients||[]);
+                              const current = user.assignedClients==="all" ? safeClients.map(x=>x.id) : (user.assignedClients||[]);
                               const newClients = assigned ? current.filter(id=>id!==c.id) : [...current, c.id];
                               const updated = usersData.map((u,idx)=>idx===i?{...u,assignedClients:newClients}:u);
                               setUsersData(updated);
@@ -3058,7 +3060,7 @@ ${text.slice(0,12000)}`}]})});
                           suggestion: currentSuggestion,
                           suggestionSource: "📋 Current selection",
                           suggestionConfidence: 100,
-                          accounts: (clients.find(c=>c.id===activeClient)?.chartOfAccounts||[]),
+                          accounts: (safeClients.find(c=>c.id===activeClient)?.chartOfAccounts||[]),
                           quickConfirm: false,
                         });
                       }} style={{fontSize:10,color:"#3b82f6",marginTop:4,background:"transparent",border:"none",cursor:"pointer",padding:0,textAlign:"left",textDecoration:"underline dotted",fontFamily:"monospace"}}>
@@ -3322,7 +3324,7 @@ ${text.slice(0,12000)}`}]})});
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
               <div>
                 <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>PERIOD MANAGEMENT</div>
-                <div style={{fontSize:16,fontWeight:"bold",color:"#f1f5f9"}}>{clients.find(c=>c.id===activeClient)?.name}</div>
+                <div style={{fontSize:16,fontWeight:"bold",color:"#f1f5f9"}}>{safeClients.find(c=>c.id===activeClient)?.name}</div>
               </div>
               <button onClick={()=>setShowPeriods(false)} style={{background:"transparent",border:"none",color:"#475569",cursor:"pointer",fontSize:20}}>✕</button>
             </div>
