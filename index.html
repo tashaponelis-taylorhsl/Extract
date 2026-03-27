@@ -391,6 +391,7 @@ function App() {
       const {chartOfAccounts, ...rest} = client;
       return rest;
     });
+    console.log("Saving to KV:", lightweight.map(c=>c.name));
     kvSet(`clients:${KV_USER}`, lightweight).catch(e => console.warn("KV save failed:", e));
   };
 
