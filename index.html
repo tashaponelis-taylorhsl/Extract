@@ -274,7 +274,7 @@ function App() {
       const s = localStorage.getItem("extract_settings");
       if (s) setSettings(JSON.parse(s));
       const c = localStorage.getItem("extract_clients");
-      if (c) setClients(JSON.parse(c));
+      if (c) { const parsed = JSON.parse(c); setClients(Array.isArray(parsed) ? parsed : []); }
       const ac = localStorage.getItem("extract_active_client");
       if (ac) setActiveClient(ac);
     } catch{}
@@ -286,12 +286,6 @@ function App() {
       const savedUser = localStorage.getItem("extract_user");
       if (savedUser) setCurrentUser(JSON.parse(savedUser));
     } catch(e) {}
-    // Auto-load users from KV on startup
-    kvGet(`users:${TRUSTED_DOMAIN}`).then(u => {
-      if (u && u.length > 0) setUsersData(u);
-      setUsersLoaded(true);
-    }).catch(e => console.warn("Users load failed:", e));
-
     // Load shared MS settings from KV if not in localStorage
     try {
       const localSettings = JSON.parse(localStorage.getItem("extract_settings")||"{}");
@@ -388,9 +382,10 @@ function App() {
   }
   const KV_USER = "taylorhsl"; // shared key for all users in this organisation
 
-  const saveClients = (c) => { 
-    setClients(c); 
-    localStorage.setItem("extract_clients", JSON.stringify(c));
+  const saveClients = (c) => {
+    const safeC = Array.isArray(c) ? c : [];
+    setClients(safeC); 
+    localStorage.setItem("extract_clients", JSON.stringify(safeC));
     // Save to KV — strip chartOfAccounts to keep payload small (reload from QBO when needed)
     const lightweight = c.map(client => {
       const {chartOfAccounts, ...rest} = client;
@@ -453,8 +448,9 @@ function App() {
         console.log("Loading clients from KV...");
         const kvClients = await kvGet(`clients:${KV_USER}`);
         if (kvClients && kvClients.length > 0) {
-          setClients(kvClients);
-          localStorage.setItem("extract_clients", JSON.stringify(kvClients));
+          const safeClients = Array.isArray(kvClients) ? kvClients : [];
+          setClients(safeClients);
+          localStorage.setItem("extract_clients", JSON.stringify(safeClients));
           console.log(`Restored ${kvClients.length} clients from KV`);
           // Also restore GL memory for each client
           for (const client of kvClients) {
@@ -2086,8 +2082,9 @@ ${text.slice(0,12000)}`}]})});
                     return;
                   }
                   // Restore clients
-                  localStorage.setItem("extract_clients", JSON.stringify(kvClients));
-                  setClients(kvClients);
+                  const safeKvClients = Array.isArray(kvClients) ? kvClients : [];
+                  localStorage.setItem("extract_clients", JSON.stringify(safeKvClients));
+                  setClients(safeKvClients);
                   // Restore GL memory and other data for each client
                   for (const c of kvClients) {
                     try {
