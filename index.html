@@ -262,7 +262,10 @@ function App() {
   const [showPeriods, setShowPeriods] = useState(false);
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
   const [currentUser, setCurrentUser] = useState(null);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  // Check if we have a saved session or OAuth callback in progress
+  const hasOAuthCallback = new URLSearchParams(window.location.search).has("code");
+  const hasSavedUser = !!localStorage.getItem("extract_user");
+  const [isAuthenticated, setIsAuthenticated] = useState(hasSavedUser || hasOAuthCallback);
   const [usersData, setUsersData] = useState([]);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState("");
