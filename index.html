@@ -398,13 +398,11 @@ function App() {
       const data = await res.json();
       console.log("KV raw response for", key, ":", JSON.stringify(data).slice(0,200));
       if (data.result === null || data.result === undefined) return null;
-      // Upstash may double-encode — try parsing twice
+      // Upstash may triple-encode — keep parsing until we get non-string
       let result = data.result;
-      if (typeof result === "string") {
-        try { result = JSON.parse(result); } catch {}
-      }
-      if (typeof result === "string") {
-        try { result = JSON.parse(result); } catch {}
+      for (let i = 0; i < 5; i++) {
+        if (typeof result !== "string") break;
+        try { result = JSON.parse(result); } catch { break; }
       }
       return result;
     } catch(e) { console.warn("KV get failed:", e); return null; }
@@ -414,7 +412,7 @@ function App() {
     try {
       const res = await fetch(`${PROXY}/api/kv`, {
         method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({ action: "set", key, value: JSON.stringify(value) })
+        body: JSON.stringify({ action: "set", key, value })
       });
       return await res.json();
     } catch(e) { console.warn("KV set failed:", e); return null; }
