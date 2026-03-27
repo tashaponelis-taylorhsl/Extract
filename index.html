@@ -262,6 +262,7 @@ function App() {
   const [showPeriods, setShowPeriods] = useState(false);
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
   const [currentUser, setCurrentUser] = useState(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [usersData, setUsersData] = useState([]);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState("");
@@ -284,7 +285,11 @@ function App() {
     // Restore user session
     try {
       const savedUser = localStorage.getItem("extract_user");
-      if (savedUser) setCurrentUser(JSON.parse(savedUser));
+      if (savedUser) {
+        const user = JSON.parse(savedUser);
+        setCurrentUser(user);
+        setIsAuthenticated(true); // Auto-login from saved session
+      }
     } catch(e) {}
     // Load shared MS settings from KV if not in localStorage
     try {
@@ -510,6 +515,7 @@ function App() {
       
       const user = await loadOrCreateUser(email, name);
       setCurrentUser(user);
+      setIsAuthenticated(true);
       localStorage.setItem("extract_user", JSON.stringify(user));
       return user;
     } catch(e) {
@@ -2000,6 +2006,39 @@ ${text.slice(0,12000)}`}]})});
   // ════════════════════════════════════════════════════════
   // RENDER
   // ════════════════════════════════════════════════════════
+  // Login screen for unauthenticated users
+  if (!isAuthenticated) {
+    const triggerMsLogin = () => {
+      const s = JSON.parse(localStorage.getItem("extract_settings")||"{}");
+      if (!s.msClientId || !s.msTenantId) {
+        alert("Microsoft login not configured. Please contact your administrator.");
+        return;
+      }
+      const verifier = Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b=>b.toString(16).padStart(2,"0")).join("");
+      const state = Math.random().toString(36).slice(2);
+      sessionStorage.setItem("oauth_state", JSON.stringify({state,verifier,type:"ms",msClientId:s.msClientId,msTenantId:s.msTenantId}));
+      crypto.subtle.digest("SHA-256",new TextEncoder().encode(verifier)).then(buf=>{
+        const challenge = btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/[+]/g,"-").replace(/[/]/g,"_").replace(/[=]/g,"");
+        const params = new URLSearchParams({client_id:s.msClientId,response_type:"code",redirect_uri:window.location.origin+window.location.pathname,scope:"User.Read Files.Read.All offline_access",state,code_challenge:challenge,code_challenge_method:"S256",prompt:"select_account"});
+        window.location.href = "https://login.microsoftonline.com/"+s.msTenantId+"/oauth2/v2.0/authorize?"+params;
+      });
+    };
+    return (
+      <div style={{minHeight:"100vh",background:"#070d1a",color:"#e2e8f0",fontFamily:"'Inter',sans-serif",display:"flex",alignItems:"center",justifyContent:"center"}}>
+        <div style={{textAlign:"center",maxWidth:400,padding:40}}>
+          <div style={{width:72,height:72,borderRadius:18,background:"linear-gradient(135deg,#3b82f6,#06b6d4)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,margin:"0 auto 24px"}}>📄</div>
+          <div style={{fontSize:36,fontWeight:"bold",color:"#f1f5f9",marginBottom:8,letterSpacing:"-1px"}}>Extract</div>
+          <div style={{fontSize:14,color:"#475569",marginBottom:48}}>AI Accounting Assistant by Taylor HSL</div>
+          <button onClick={triggerMsLogin} style={{width:"100%",padding:"16px 24px",background:"linear-gradient(135deg,#0078d4,#106ebe)",border:"none",borderRadius:12,color:"#fff",fontSize:15,fontWeight:"bold",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:10,marginBottom:20,boxShadow:"0 4px 20px rgba(0,120,212,0.3)"}}>
+            <span style={{fontSize:22}}>🔷</span> Sign in with Microsoft 365
+          </button>
+          <div style={{fontSize:11,color:"#334155"}}>Only @{TRUSTED_DOMAIN} accounts are authorised</div>
+          {authError && <div style={{marginTop:16,padding:12,background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:8,fontSize:12,color:"#ef4444"}}>{authError}</div>}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{minHeight:"100vh",background:"#070d1a",fontFamily:"'Courier New',monospace",color:"#e2e8f0"}}>
 
@@ -2028,12 +2067,22 @@ ${text.slice(0,12000)}`}]})});
           </select>
         </div>
 
-        {/* User display */}
+        {/* User display + Sign out */}
         {currentUser && (
           <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
             <div style={{fontSize:10,color:"#475569"}}>
               {currentUser.role === "admin" ? "👑" : "👤"} {currentUser.name || currentUser.email}
             </div>
+            <button onClick={()=>{
+              if (confirm("Sign out of Extract?")) {
+                localStorage.removeItem("extract_user");
+                setCurrentUser(null);
+                setIsAuthenticated(false);
+                setGraphToken(null);
+              }
+            }} style={{fontSize:10,padding:"3px 8px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:4,color:"#475569",cursor:"pointer"}}>
+              Sign out
+            </button>
           </div>
         )}
 
@@ -2117,9 +2166,12 @@ ${text.slice(0,12000)}`}]})});
                     } catch(e) { console.warn("COA restore failed:", e); }
                   }
                   // Update with COA included
-                  localStorage.setItem("extract_clients", JSON.stringify(finalClients));
-                  setClients(finalClients);
-                  alert(`✅ Restored ${kvClients.length} client(s) with GL accounts and all learning from cloud!`);
+                  const safeFC = Array.isArray(finalClients) ? finalClients : [];
+                  localStorage.setItem("extract_clients", JSON.stringify(safeFC));
+                  setClients(safeFC);
+                  // Log GL account counts
+                  safeFC.forEach(c => console.log(`${c.name}: ${c.chartOfAccounts?.length||0} GL accounts`));
+                  alert(`✅ Restored ${safeFC.length} client(s) with ${safeFC.reduce((s,c)=>s+(c.chartOfAccounts?.length||0),0)} GL accounts and all learning from cloud!`);
                 } catch(e) {
                   alert("Restore failed: " + e.message);
                 }
