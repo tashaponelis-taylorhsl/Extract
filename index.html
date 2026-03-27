@@ -2071,11 +2071,13 @@ ${text.slice(0,12000)}`}]})});
         </div>
 
         {/* User display + Sign out */}
-        {currentUser && (
-          <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+          {currentUser && (
             <div style={{fontSize:10,color:"#475569"}}>
               {currentUser.role === "admin" ? "👑" : "👤"} {currentUser.name || currentUser.email}
             </div>
+          )}
+          {isAuthenticated && (
             <button onClick={()=>{
               if (confirm("Sign out of Extract?")) {
                 localStorage.removeItem("extract_user");
@@ -2083,11 +2085,11 @@ ${text.slice(0,12000)}`}]})});
                 setIsAuthenticated(false);
                 setGraphToken(null);
               }
-            }} style={{fontSize:10,padding:"3px 8px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:4,color:"#475569",cursor:"pointer"}}>
-              Sign out
+            }} style={{fontSize:10,padding:"4px 10px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:4,color:"#64748b",cursor:"pointer"}}>
+              🚪 Sign out
             </button>
-          </div>
-        )}
+          )}
+        </div>
 
         {/* Nav */}
         <div style={{marginLeft: currentUser ? 16 : "auto",display:"flex",gap:8,alignItems:"center"}}>
