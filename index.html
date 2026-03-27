@@ -386,6 +386,8 @@ function App() {
     a.download = `extract-error-logs-${new Date().toISOString().slice(0,10)}.txt`;
     a.click();
   }
+  const KV_USER = "taylorhsl"; // shared key for all users in this organisation
+
   const saveClients = (c) => { 
     setClients(c); 
     localStorage.setItem("extract_clients", JSON.stringify(c));
@@ -396,9 +398,6 @@ function App() {
     });
     kvSet(`clients:${KV_USER}`, lightweight).catch(e => console.warn("KV save failed:", e));
   };
-
-  // ── Vercel KV (Upstash) ──────────────────────────────────────────────
-  const KV_USER = "taylorhsl"; // shared across all bookkeepers
 
   async function kvGet(key) {
     try {
@@ -2595,11 +2594,12 @@ ${text.slice(0,12000)}`}]})});
                         {ex?.documentNumber&&<span style={{fontSize:11,color:"#475569"}}>#{ex.documentNumber}</span>}
                         {ex?.voucherNumber&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(59,130,246,0.1)",border:"1px solid rgba(59,130,246,0.2)",borderRadius:3,color:"#3b82f6"}}>🎫 {ex.voucherNumber}</span>}
                         {ex?.taxInvoiceNumber&&ex.taxInvoiceNumber!==ex.documentNumber&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(245,158,11,0.1)",border:"1px solid rgba(245,158,11,0.2)",borderRadius:3,color:"#f59e0b"}}>TAX INV: {ex.taxInvoiceNumber}</span>}
-                        {ex?.taxInvoiceCompliance&&ex&&(()=>{
-                          const r=ex.taxInvoiceCompliance.complianceResult;
-                          const color=r==="PASS"?"#10b981":r==="WARN"?"#f59e0b":"#ef4444";
-                          const icon=r==="PASS"?"✅":r==="WARN"?"⚠️":"❌";
-                          return <button onClick={()=>setComplianceModal({result,ri,report:buildComplianceReport(ex.taxInvoiceCompliance,ex.vendor,ex.taxInvoiceNumber)})} style={{fontSize:10,padding:"1px 7px",background:`rgba(${r==="PASS"?"16,185,129":r==="WARN"?"245,158,11":"239,68,68"},0.1)`,border:`1px solid rgba(${r==="PASS"?"16,185,129":r==="WARN"?"245,158,11":"239,68,68"},0.2)`,borderRadius:3,color,cursor:"pointer",fontFamily:"monospace"}}>{icon} Thai Compliance: {r}</button>;
+                        {ex?.taxInvoiceCompliance && ex && (() => {
+                          const r = ex.taxInvoiceCompliance.complianceResult || "FAIL";
+                          const color = r==="PASS"?"#10b981":r==="WARN"?"#f59e0b":"#ef4444";
+                          const icon = r==="PASS"?"✅":r==="WARN"?"⚠️":"❌";
+                          const bg = r==="PASS"?"16,185,129":r==="WARN"?"245,158,11":"239,68,68";
+                          return <button onClick={()=>setComplianceModal({result,ri,report:buildComplianceReport(ex.taxInvoiceCompliance,ex.vendor,ex.taxInvoiceNumber)})} style={{fontSize:10,padding:"1px 7px",background:`rgba(${bg},0.1)`,border:`1px solid rgba(${bg},0.2)`,borderRadius:3,color,cursor:"pointer",fontFamily:"monospace"}}>{icon} Thai Compliance: {r}</button>;
                         })()}
                         {ex && (() => { const {refNo,flagMissing} = buildRefNumber(ex,result.file,ex?.transactionType||""); return flagMissing ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:3,color:"#ef4444"}}>⚠️ No voucher no.</span> : refNo ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(22,32,50,0.4)",border:"1px solid #162032",borderRadius:3,color:"#64748b"}}>REF: {refNo}</span> : null; })()}
                         {ex?.documentDate&&<span style={{fontSize:11,color:"#475569"}}>{ex.documentDate}</span>}
@@ -3093,7 +3093,7 @@ ${text.slice(0,12000)}`}]})});
             </div>
 
             {/* Total validation */}
-            {React.createElement(()=>{
+            {(()=>{
               const lines = lineReviewModal?.lines || [];
               const lineSum = lines.reduce((s,l)=>s+Math.abs(l.amount||0),0);
               const vatAmt = lineReviewModal?.vatAmount || 0;
@@ -3101,17 +3101,15 @@ ${text.slice(0,12000)}`}]})});
               const expectedSubtotal = docTotal - vatAmt;
               const diff = Math.abs(lineSum - expectedSubtotal);
               const grandTotal = lineSum + vatAmt;
-              if (diff > 0.05) {
-                return React.createElement('div', {style:{marginBottom:12,padding:10,background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:6,fontSize:11}},
-                  React.createElement('div', {style:{color:"#f59e0b",fontWeight:"bold",marginBottom:4}}, "⚠️ Line total mismatch"),
-                  React.createElement('div', {style:{color:"#94a3b8"}}, `Lines sum to ฿${lineSum.toFixed(2)} but document subtotal (ex-VAT) should be ฿${expectedSubtotal.toFixed(2)}`),
-                  React.createElement('div', {style:{color:"#94a3b8",marginTop:2}}, "Please check amounts match your document before posting.")
-                );
-              }
-              return React.createElement('div', {style:{marginBottom:12,padding:8,background:"rgba(16,185,129,0.06)",border:"1px solid rgba(16,185,129,0.2)",borderRadius:6,fontSize:11,color:"#10b981"}},
-                `✅ Lines ฿${lineSum.toFixed(2)} + VAT ฿${vatAmt.toFixed(2)} = ฿${grandTotal.toFixed(2)} (document total: ฿${docTotal.toFixed(2)})`
+              if (diff > 0.05) return (
+                <div style={{marginBottom:12,padding:10,background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:6,fontSize:11}}>
+                  <div style={{color:"#f59e0b",fontWeight:"bold",marginBottom:4}}>⚠️ Line total mismatch</div>
+                  <div style={{color:"#94a3b8"}}>Lines sum to ฿{lineSum.toFixed(2)} but document subtotal (ex-VAT) should be ฿{expectedSubtotal.toFixed(2)}</div>
+                  <div style={{color:"#94a3b8",marginTop:2}}>Please check amounts match your document before posting.</div>
+                </div>
               );
-            }, null)}
+              return <div style={{marginBottom:12,padding:8,background:"rgba(16,185,129,0.06)",border:"1px solid rgba(16,185,129,0.2)",borderRadius:6,fontSize:11,color:"#10b981"}}>✅ Lines ฿{lineSum.toFixed(2)} + VAT ฿{vatAmt.toFixed(2)} = ฿{grandTotal.toFixed(2)} (document total: ฿{docTotal.toFixed(2)})</div>;
+            })()}
             <div style={{fontSize:11,color:"#334155",marginBottom:16,padding:10,background:"rgba(22,32,50,0.3)",borderRadius:6}}>
               ℹ️ You can edit descriptions above. GL accounts will be confirmed in the next step. Click Post to continue.
             </div>
