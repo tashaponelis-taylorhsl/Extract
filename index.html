@@ -671,6 +671,9 @@ function App() {
 
       const updated = clients.map(c => c.id === client.id ? {...c, chartOfAccounts: accounts, customFields, coaLoadedAt: new Date().toISOString()} : c);
       saveClients(updated);
+      // Save GL accounts to KV separately so bookkeepers can access them
+      kvSet(`coa:${client.id}`, accounts).catch(e => console.warn("KV COA save failed:", e));
+      kvSet(`customFields:${client.id}`, customFields).catch(e => console.warn("KV CF save failed:", e));
       const cfCount = Object.keys(customFields).length;
       return { accounts, customFields, cfCount };
     } catch(e) { console.error("COA load failed:", e); return { accounts: [], customFields: {}, cfCount: 0 }; }
@@ -2087,6 +2090,7 @@ ${text.slice(0,12000)}`}]})});
                   localStorage.setItem("extract_clients", JSON.stringify(safeKvClients));
                   setClients(safeKvClients);
                   // Restore GL memory and other data for each client
+                  let finalClients = [...safeKvClients];
                   for (const c of kvClients) {
                     try {
                       const glMemory = await kvGet(`gl_memory:${c.id}`);
@@ -2100,8 +2104,22 @@ ${text.slice(0,12000)}`}]})});
                       const processed = await kvGet(`processed:${c.id}`);
                       if (processed) localStorage.setItem(`processed_files_${c.id}`, JSON.stringify(processed));
                     } catch(e) {}
+                    // Restore chart of accounts from KV
+                    try {
+                      const coa = await kvGet(`coa:${c.id}`);
+                      const customFields = await kvGet(`customFields:${c.id}`);
+                      if (coa && coa.length > 0) {
+                        finalClients = finalClients.map(cl =>
+                          cl.id === c.id ? {...cl, chartOfAccounts: coa, customFields: customFields||{}} : cl
+                        );
+                        console.log(`Restored ${coa.length} GL accounts for ${c.name}`);
+                      }
+                    } catch(e) { console.warn("COA restore failed:", e); }
                   }
-                  alert(`✅ Restored ${kvClients.length} client(s) and all GL learning from cloud!`);
+                  // Update with COA included
+                  localStorage.setItem("extract_clients", JSON.stringify(finalClients));
+                  setClients(finalClients);
+                  alert(`✅ Restored ${kvClients.length} client(s) with GL accounts and all learning from cloud!`);
                 } catch(e) {
                   alert("Restore failed: " + e.message);
                 }
@@ -2245,7 +2263,13 @@ ${text.slice(0,12000)}`}]})});
                         console.log("GL KV result:", JSON.stringify(r2));
                         await kvSet(`periods:${client.id}`, getClosedPeriods(client.id));
                         await kvSet(`processed:${client.id}`, getProcessedFiles(client.id));
-                        alert("✅ All data synced to cloud!");
+                        // Save chart of accounts separately so bookkeepers can access it
+                        if (client.chartOfAccounts?.length > 0) {
+                          await kvSet(`coa:${client.id}`, client.chartOfAccounts);
+                          await kvSet(`customFields:${client.id}`, client.customFields||{});
+                          console.log(`Saved ${client.chartOfAccounts.length} GL accounts to KV`);
+                        }
+                        alert("✅ All data synced to cloud including GL accounts!");
                       } catch(e) {
                         alert("❌ Sync failed: " + e.message);
                         console.error("Sync error:", e);
