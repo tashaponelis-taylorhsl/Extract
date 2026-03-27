@@ -386,13 +386,7 @@ function App() {
     const safeC = Array.isArray(c) ? c : [];
     setClients(safeC); 
     localStorage.setItem("extract_clients", JSON.stringify(safeC));
-    // Save to KV — strip chartOfAccounts to keep payload small (reload from QBO when needed)
-    const lightweight = c.map(client => {
-      const {chartOfAccounts, ...rest} = client;
-      return rest;
-    });
-    console.log("Saving to KV:", lightweight.map(c=>c.name));
-    kvSet(`clients:${KV_USER}`, lightweight).catch(e => console.warn("KV save failed:", e));
+    // KV sync done explicitly via ☁️ Sync button only
   };
 
   async function kvGet(key) {
@@ -427,12 +421,11 @@ function App() {
     } catch(e) { console.warn("KV del failed:", e); }
   }
 
-  // Save clients to both localStorage (fast) and KV (persistent)
+  // Save clients to localStorage
   async function saveClientsKV(c) {
     const safeC = Array.isArray(c) ? c : [];
     setClients(safeC);
     localStorage.setItem("extract_clients", JSON.stringify(safeC));
-    await kvSet(`clients:${KV_USER}`, safeC);
   }
 
   // Save GL memory to both localStorage and KV
@@ -978,7 +971,6 @@ function App() {
     const periods = getClosedPeriods(clientId);
     periods[periodKey] = { closedOn: closedDate, closedAt: new Date().toISOString() };
     localStorage.setItem(`closed_periods_${clientId}`, JSON.stringify(periods));
-    kvSet(`periods:${clientId}`, periods).catch(e => console.warn("KV periods save failed:", e));
   }
 
   function reopenPeriod(clientId, periodKey) {
@@ -1130,8 +1122,7 @@ function App() {
 
   function saveGLMemory(clientId, memory) {
     localStorage.setItem(`gl_memory_${clientId}`, JSON.stringify(memory));
-    // Also save to KV for persistence
-    kvSet(`gl_memory:${clientId}`, memory).catch(e => console.warn("KV GL save failed:", e));
+    // Note: KV sync done via explicit Sync button only
   }
 
   function learnGLRule(clientId, vendor, txType, keywords, accountName) {
@@ -1235,7 +1226,6 @@ function App() {
       postedByEmail: user.email || "",
     };
     localStorage.setItem(`processed_files_${clientId}`, JSON.stringify(processed));
-    kvSet(`processed:${clientId}`, processed).catch(e => console.warn("KV processed save failed:", e));
   }
 
   function isFileProcessed(clientId, fileId) {
@@ -2234,12 +2224,24 @@ ${text.slice(0,12000)}`}]})});
                     <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={()=>{setActiveClient(client.id);setShowPeriods(true);}}>📅 Periods</button>
                     <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={()=>exportClient(client)}>📤 Export</button>
                     <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px",color:"#10b981",borderColor:"rgba(16,185,129,0.3)"}} onClick={async()=>{
-                      // Force sync everything to KV
-                      await kvSet(`clients:${KV_USER}`, clients);
-                      await kvSet(`gl_memory:${client.id}`, getGLMemory(client.id));
-                      await kvSet(`periods:${client.id}`, getClosedPeriods(client.id));
-                      await kvSet(`processed:${client.id}`, getProcessedFiles(client.id));
-                      alert("✅ All data synced to cloud!");
+                      try {
+                        // Strip chartOfAccounts before saving to KV
+                        const lightweight = safeClients.map(c => {
+                          const {chartOfAccounts, ...rest} = c;
+                          return rest;
+                        });
+                        console.log("Syncing to KV:", lightweight.map(c=>c.name));
+                        const r1 = await kvSet(`clients:${KV_USER}`, lightweight);
+                        console.log("Clients KV result:", JSON.stringify(r1));
+                        const r2 = await kvSet(`gl_memory:${client.id}`, getGLMemory(client.id));
+                        console.log("GL KV result:", JSON.stringify(r2));
+                        await kvSet(`periods:${client.id}`, getClosedPeriods(client.id));
+                        await kvSet(`processed:${client.id}`, getProcessedFiles(client.id));
+                        alert("✅ All data synced to cloud!");
+                      } catch(e) {
+                        alert("❌ Sync failed: " + e.message);
+                        console.error("Sync error:", e);
+                      }
                     }}>☁️ Sync</button>
                     <button className="btn" style={{...btnSecondary,fontSize:10,padding:"4px 10px"}} onClick={()=>{
                       setActiveClient(client.id);
