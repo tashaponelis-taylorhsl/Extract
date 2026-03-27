@@ -2487,10 +2487,9 @@ ${text.slice(0,12000)}`}]})});
                               <div style={{padding:"12px 16px",borderBottom:"1px solid #162032",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                                 <div style={{fontSize:11,color:"#475569",letterSpacing:"0.1em"}}>
                                   {graphFiles.filter(f=>f.folder).length} FOLDERS · {graphFiles.filter(f=>!f.folder).length} PDFs
-                                  {activeClient && (() => {
-                                    const unprocessed = graphFiles.filter(f=>!f.folder&&!isFileProcessed(activeClient,f.id)).length;
-                                    return unprocessed > 0 ? <span style={{color:"#f59e0b",marginLeft:8}}>· {unprocessed} NEW</span> : null;
-                                  })()}
+                                  {activeClient && graphFiles.filter(f=>!f.folder&&!isFileProcessed(activeClient,f.id)).length > 0 && (
+                                    <span style={{color:"#f59e0b",marginLeft:8}}>· {graphFiles.filter(f=>!f.folder&&!isFileProcessed(activeClient,f.id)).length} NEW</span>
+                                  )}
                                   · {Object.values(selectedFiles).filter(Boolean).length} SELECTED
                                 </div>
                                 <div style={{display:"flex",gap:6}}>
@@ -2601,7 +2600,8 @@ ${text.slice(0,12000)}`}]})});
                           const bg = r==="PASS"?"16,185,129":r==="WARN"?"245,158,11":"239,68,68";
                           return <button onClick={()=>setComplianceModal({result,ri,report:buildComplianceReport(ex.taxInvoiceCompliance,ex.vendor,ex.taxInvoiceNumber)})} style={{fontSize:10,padding:"1px 7px",background:`rgba(${bg},0.1)`,border:`1px solid rgba(${bg},0.2)`,borderRadius:3,color,cursor:"pointer",fontFamily:"monospace"}}>{icon} Thai Compliance: {r}</button>;
                         })()}
-                        {ex && (() => { const {refNo,flagMissing} = buildRefNumber(ex,result.file,ex?.transactionType||""); return flagMissing ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:3,color:"#ef4444"}}>⚠️ No voucher no.</span> : refNo ? <span style={{fontSize:10,padding:"1px 7px",background:"rgba(22,32,50,0.4)",border:"1px solid #162032",borderRadius:3,color:"#64748b"}}>REF: {refNo}</span> : null; })()}
+                        {ex && buildRefNumber(ex,result.file,ex?.transactionType||"").flagMissing && <span style={{fontSize:10,padding:"1px 7px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:3,color:"#ef4444"}}>⚠️ No voucher no.</span>}
+                        {ex && !buildRefNumber(ex,result.file,ex?.transactionType||"").flagMissing && buildRefNumber(ex,result.file,ex?.transactionType||"").refNo && <span style={{fontSize:10,padding:"1px 7px",background:"rgba(22,32,50,0.4)",border:"1px solid #162032",borderRadius:3,color:"#64748b"}}>REF: {buildRefNumber(ex,result.file,ex?.transactionType||"").refNo}</span>}
                         {ex?.documentDate&&<span style={{fontSize:11,color:"#475569"}}>{ex.documentDate}</span>}
                         {result.source==="teams"&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(0,120,212,0.1)",border:"1px solid rgba(0,120,212,0.2)",borderRadius:3,color:"#0078d4"}}>🔷 Teams</span>}
                         {ex?.transactionTypeReason&&<span style={{fontSize:10,color:"#475569",fontStyle:"italic"}}>({ex.transactionTypeReason})</span>}
@@ -3386,7 +3386,27 @@ ${text.slice(0,12000)}`}]})});
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error: error.message }; }
+  componentDidCatch(error, info) { console.error("React error:", error, info); }
+  render() {
+    if (this.state.error) {
+      return React.createElement('div', {style:{padding:40,color:"#ef4444",fontFamily:"monospace",background:"#070d1a",minHeight:"100vh"}},
+        React.createElement('div', {style:{fontSize:20,marginBottom:16}}, "⚠️ App Error"),
+        React.createElement('div', {style:{fontSize:13,color:"#94a3b8",marginBottom:16}}, this.state.error),
+        React.createElement('button', {
+          onClick:()=>{ localStorage.clear(); window.location.reload(); },
+          style:{padding:"10px 20px",background:"#3b82f6",border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontSize:13}
+        }, "Clear Cache & Reload")
+      );
+    }
+    return this.props.children;
+  }
+}
+ReactDOM.createRoot(document.getElementById("root")).render(
+  React.createElement(ErrorBoundary, null, React.createElement(App))
+);
 </script>
 </body>
 </html>
