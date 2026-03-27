@@ -396,9 +396,17 @@ function App() {
         body: JSON.stringify({ action: "get", key })
       });
       const data = await res.json();
+      console.log("KV raw response for", key, ":", JSON.stringify(data).slice(0,200));
       if (data.result === null || data.result === undefined) return null;
-      // Upstash returns strings — parse JSON
-      try { return JSON.parse(data.result); } catch { return data.result; }
+      // Upstash may double-encode — try parsing twice
+      let result = data.result;
+      if (typeof result === "string") {
+        try { result = JSON.parse(result); } catch {}
+      }
+      if (typeof result === "string") {
+        try { result = JSON.parse(result); } catch {}
+      }
+      return result;
     } catch(e) { console.warn("KV get failed:", e); return null; }
   }
 
@@ -2075,7 +2083,9 @@ ${text.slice(0,12000)}`}]})});
                     return;
                   }
                   // Restore clients
+                  console.log("Raw KV clients:", JSON.stringify(kvClients));
                   const safeKvClients = Array.isArray(kvClients) ? kvClients : [];
+                  console.log("Safe clients names:", safeKvClients.map(c=>c.name));
                   localStorage.setItem("extract_clients", JSON.stringify(safeKvClients));
                   setClients(safeKvClients);
                   // Restore GL memory and other data for each client
