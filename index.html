@@ -2866,14 +2866,24 @@ ${text.slice(0,12000)}`}]})});
               <div style={{fontSize:10,color:"#334155",marginTop:6}}>Users can also be added automatically when they sign in with Microsoft 365</div>
             </div>
 
-            {/* Load users button */}
-            {!usersLoaded && (
-              <button className="btn" style={{...btnSecondary,marginBottom:16}} onClick={async()=>{
-                const u = await kvGet(`users:${TRUSTED_DOMAIN}`);
-                setUsersData(u||[]);
-                setUsersLoaded(true);
-              }}>Load Users from Cloud</button>
-            )}
+            {/* Load/Save users buttons */}
+            <div style={{display:"flex",gap:8,marginBottom:16}}>
+              {!usersLoaded && (
+                <button className="btn" style={btnSecondary} onClick={async()=>{
+                  const u = await kvGet(`users:${TRUSTED_DOMAIN}`);
+                  setUsersData(u||[]);
+                  setUsersLoaded(true);
+                }}>☁️ Load Users from Cloud</button>
+              )}
+              <button className="btn" style={{...btnSecondary,color:"#10b981",borderColor:"rgba(16,185,129,0.3)"}} onClick={async()=>{
+                try {
+                  await kvSet(`users:${TRUSTED_DOMAIN}`, usersData);
+                  alert(`✅ ${usersData.length} user(s) saved to cloud!`);
+                } catch(e) {
+                  alert("❌ Save failed: " + e.message);
+                }
+              }}>☁️ Save Users to Cloud</button>
+            </div>
 
             {/* Users list */}
             <div style={{...card,overflow:"hidden"}}>
