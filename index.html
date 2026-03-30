@@ -1241,6 +1241,15 @@ function App() {
     localStorage.setItem(`processed_files_${clientId}`, JSON.stringify(processed));
   }
 
+  function dismissResult(ri) {
+    setResults(prev => prev.filter((_,i) => i !== ri));
+    setPostStatus(prev => {
+      const next = {...prev};
+      delete next[ri];
+      return next;
+    });
+  }
+
   function isFileProcessed(clientId, fileId) {
     const processed = getProcessedFiles(clientId);
     return !!processed[fileId];
@@ -1596,8 +1605,17 @@ function App() {
         }
       }
 
-      // Mark as processed — use fileId for Teams files, generate ID for uploads
+      // Check if already processed before posting
       const trackingId = result.fileId || `upload_${Date.now()}_${result.file}`;
+      const existingRecord = result.fileId ? getProcessedFiles(client.id)[result.fileId] : null;
+      if (existingRecord && !window._forceRepost) {
+        // Already posted — show in status and auto-dismiss
+        const rec = existingRecord;
+        setPostStatus(s=>({...s,[ri]:{status:"already_posted", qboId: rec.qboId, txType: rec.txType, processedAt: rec.processedAt}}));
+        setTimeout(() => dismissResult(ri), 5000);
+        return;
+      }
+      // Mark as processed — use fileId for Teams files, generate ID for uploads
       markFileProcessed(client.id, trackingId, result.file, txId, txType, {
         vendor: ex.vendor,
         amount: ex.totalAmount,
@@ -1612,6 +1630,8 @@ function App() {
 
       const cfPopulated = buildCustomFields(currentClient||client, ex.taxInvoiceNumber||null).length > 0;
       setPostStatus(s=>({...s,[ri]:{status:"posted", qboId: txId, txType, taxInvField: cfPopulated ? ex.taxInvoiceNumber : null}}));
+      // Auto-dismiss after 4 seconds
+      setTimeout(() => dismissResult(ri), 4000);
     } catch(e) {
       logError("QBO Post Failed", e, { clientName: client.name, fileName: result.file, realmId: client.qboRealmId });
       setPostStatus(s=>({...s,[ri]:{status:"error", error: e.message}}));
@@ -2708,6 +2728,8 @@ ${text.slice(0,12000)}`}]})});
                           return <button onClick={()=>setComplianceModal({result,ri,report:buildComplianceReport(ex.taxInvoiceCompliance,ex.vendor,ex.taxInvoiceNumber)})} style={{fontSize:10,padding:"1px 7px",background:`rgba(${bg},0.1)`,border:`1px solid rgba(${bg},0.2)`,borderRadius:3,color,cursor:"pointer",fontFamily:"monospace"}}>{icon} Thai Compliance: {r}</button>;
                         })()}
                         {ex && buildRefNumber(ex,result.file,ex?.transactionType||"").flagMissing && <span style={{fontSize:10,padding:"1px 7px",background:"rgba(239,68,68,0.1)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:3,color:"#ef4444"}}>⚠️ No voucher no.</span>}
+                        {/* Dismiss button — always visible top right */}
+                        <button onClick={()=>dismissResult(ri)} title="Dismiss document" style={{marginLeft:"auto",background:"transparent",border:"1px solid #1e3a5f",borderRadius:4,color:"#475569",cursor:"pointer",fontSize:12,padding:"3px 10px",flexShrink:0}}>✕ Dismiss</button>
                         {ex && !buildRefNumber(ex,result.file,ex?.transactionType||"").flagMissing && buildRefNumber(ex,result.file,ex?.transactionType||"").refNo && <span style={{fontSize:10,padding:"1px 7px",background:"rgba(22,32,50,0.4)",border:"1px solid #162032",borderRadius:3,color:"#64748b"}}>REF: {buildRefNumber(ex,result.file,ex?.transactionType||"").refNo}</span>}
                         {ex?.documentDate&&<span style={{fontSize:11,color:"#475569"}}>{ex.documentDate}</span>}
                         {result.source==="teams"&&<span style={{fontSize:10,padding:"1px 7px",background:"rgba(0,120,212,0.1)",border:"1px solid rgba(0,120,212,0.2)",borderRadius:3,color:"#0078d4"}}>🔷 Teams</span>}
@@ -2716,6 +2738,7 @@ ${text.slice(0,12000)}`}]})});
 
                         {/* Post status */}
                         {ps?.status==="posting"&&<span style={{fontSize:11,color:"#f59e0b"}}>⏳ Posting...</span>}
+                        {ps?.status==="already_posted"&&<span style={{fontSize:11,color:"#f59e0b"}}>⚠️ Already posted on {new Date(ps.processedAt).toLocaleDateString()} ({ps.txType} #{ps.qboId}) — dismissing...</span>}
                         {ps?.status==="posted"&&!ps?.updated&&<span style={{fontSize:11,color:"#10b981"}}>✅ Posted to QBO ({ps.txType} #{ps.qboId}){ps.taxInvField ? ` · Tax Inv: ${ps.taxInvField}` : " · ⚠️ No tax inv field"}</span>}
                         {ps?.status==="posted"&&ps?.updated&&!ps?.journalId&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated #{ps.qboId} — Tax Invoice & PDF added</span>}
                         {ps?.status==="posted"&&ps?.updated&&ps?.journalId&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated #{ps.qboId} — VAT moved to Confirmed (JE #{ps.journalId})</span>}
