@@ -257,8 +257,7 @@ function App() {
   const [periodModal, setPeriodModal] = useState(null); // {result, ri, suggestedDates}
   const [complianceModal, setComplianceModal] = useState(null); // {result, ri, report}
   const [glModal, setGlModal] = useState(null);
-  const [lineReviewModal, setLineReviewModal] = useState(null); // {resolve, lines, vendor, total, vatAmount, vatType}
-  const lineReviewResolveRef = useRef(null); // {description, vendor, suggestion, accounts}
+
   const glResolveRef = useRef(null); // stores resolve callback for GL modal
   const [showPeriods, setShowPeriods] = useState(false);
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
@@ -3293,118 +3292,7 @@ ${text.slice(0,12000)}`}]})});
           </div>
         )}
 
-      {/* ═══ LINE REVIEW MODAL ═══ */}
-      {lineReviewModal && (
-        <div style={{position:"fixed",top:0,left:0,right:0,bottom:0,background:"rgba(0,0,0,0.85)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:2000,padding:20}}>
-          <div style={{background:"#0d1b35",border:"1px solid #1e3a5f",borderRadius:14,padding:28,maxWidth:620,width:"100%",maxHeight:"90vh",display:"flex",flexDirection:"column",animation:"fadeUp 0.2s ease"}}>
-            <div style={{marginBottom:16}}>
-              <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>REVIEW BEFORE POSTING</div>
-              <div style={{fontSize:15,fontWeight:"bold",color:"#f1f5f9"}}>{lineReviewModal.vendor}</div>
-              <div style={{fontSize:11,color:"#475569"}}>
-                {lineReviewModal.voucherNumber && `${lineReviewModal.voucherNumber} · `}
-                {lineReviewModal.docNumber && `#${lineReviewModal.docNumber} · `}
-                Total: ฿{(lineReviewModal.total||0).toLocaleString()}
-              </div>
-            </div>
-
-            <div style={{fontSize:11,color:"#475569",marginBottom:8}}>AI grouped line items — verify before posting:</div>
-
-            {/* Line items */}
-            <div style={{flex:1,overflow:"auto",border:"1px solid #162032",borderRadius:8,marginBottom:16}}>
-              {(lineReviewModal?.lines||[]).map((line,i)=>(
-                <div key={i} style={{padding:"12px 16px",borderBottom:"1px solid rgba(22,32,50,0.6)"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:10}}>
-                    <div style={{flex:1}}>
-                      <input 
-                        defaultValue={line.description}
-                        onChange={e=>{lineReviewModal.lines[i].description=e.target.value;}}
-                        style={{width:"100%",background:"transparent",border:"none",borderBottom:"1px solid #1e3a5f",color:"#e2e8f0",fontSize:12,padding:"2px 0",fontFamily:"monospace"}}
-                      />
-                      <button onClick={()=>{
-                        // Open GL modal to change this line's account
-                        const currentSuggestion = line.accountName;
-                        glResolveRef.current = (acc) => {
-                          if (acc) {
-                            lineReviewModal.lines[i].accountName = acc.name;
-                            lineReviewModal.lines[i].accountId = acc.value;
-                            setLineReviewModal({...lineReviewModal});
-                          }
-                          setGlModal(null);
-                        };
-                        setGlModal({
-                          description: line.description,
-                          vendor: lineReviewModal.vendor,
-                          suggestion: currentSuggestion,
-                          suggestionSource: "📋 Current selection",
-                          suggestionConfidence: 100,
-                          accounts: (safeClients.find(c=>c.id===activeClient)?.chartOfAccounts||[]),
-                          quickConfirm: false,
-                        });
-                      }} style={{fontSize:10,color:"#3b82f6",marginTop:4,background:"transparent",border:"none",cursor:"pointer",padding:0,textAlign:"left",textDecoration:"underline dotted",fontFamily:"monospace"}}>
-                        ✏️ {line.accountName||"— tap to select account —"}
-                      </button>
-                    </div>
-                    <div style={{fontSize:13,color:"#e2e8f0",fontWeight:"bold",whiteSpace:"nowrap"}}>
-                      ฿{(line.amount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {/* VAT line preview */}
-              {lineReviewModal.vatAmount > 0 && (
-                <div style={{padding:"12px 16px",background:"rgba(59,130,246,0.05)"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div>
-                      <div style={{fontSize:12,color:"#94a3b8"}}>VAT 7%</div>
-                      <div style={{fontSize:10,color:lineReviewModal.vatType==="confirmed"?"#10b981":"#f59e0b"}}>
-                        → {lineReviewModal.vatType==="confirmed"?"Input Tax - Confirmed ✅":"Input Tax - Pending ⏳"}
-                      </div>
-                    </div>
-                    <div style={{fontSize:13,color:"#94a3b8",fontWeight:"bold"}}>
-                      ฿{(lineReviewModal.vatAmount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Total validation */}
-            {(()=>{
-              const lines = lineReviewModal?.lines || [];
-              const lineSum = lines.reduce((s,l)=>s+Math.abs(l.amount||0),0);
-              const vatAmt = lineReviewModal?.vatAmount || 0;
-              const docTotal = lineReviewModal?.total || 0;
-              const expectedSubtotal = docTotal - vatAmt;
-              const diff = Math.abs(lineSum - expectedSubtotal);
-              const grandTotal = lineSum + vatAmt;
-              if (diff > 0.05) return (
-                <div style={{marginBottom:12,padding:10,background:"rgba(245,158,11,0.08)",border:"1px solid rgba(245,158,11,0.3)",borderRadius:6,fontSize:11}}>
-                  <div style={{color:"#f59e0b",fontWeight:"bold",marginBottom:4}}>⚠️ Line total mismatch</div>
-                  <div style={{color:"#94a3b8"}}>Lines sum to ฿{lineSum.toFixed(2)} but document subtotal (ex-VAT) should be ฿{expectedSubtotal.toFixed(2)}</div>
-                  <div style={{color:"#94a3b8",marginTop:2}}>Please check amounts match your document before posting.</div>
-                </div>
-              );
-              return <div style={{marginBottom:12,padding:8,background:"rgba(16,185,129,0.06)",border:"1px solid rgba(16,185,129,0.2)",borderRadius:6,fontSize:11,color:"#10b981"}}>✅ Lines ฿{lineSum.toFixed(2)} + VAT ฿{vatAmt.toFixed(2)} = ฿{grandTotal.toFixed(2)} (document total: ฿{docTotal.toFixed(2)})</div>;
-            })()}
-            <div style={{fontSize:11,color:"#334155",marginBottom:16,padding:10,background:"rgba(22,32,50,0.3)",borderRadius:6}}>
-              ℹ️ You can edit descriptions above. GL accounts will be confirmed in the next step. Click Post to continue.
-            </div>
-
-            <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-              <button onClick={()=>{lineReviewResolveRef.current?.(null);lineReviewResolveRef.current=null;setLineReviewModal(null);}} 
-                style={{padding:"9px 18px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:7,color:"#64748b",cursor:"pointer",fontSize:12}}>
-                Cancel
-              </button>
-              <button onClick={()=>{lineReviewResolveRef.current?.(lineReviewModal.lines);lineReviewResolveRef.current=null;setLineReviewModal(null);}} 
-                style={{padding:"9px 20px",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:"bold"}}>
-                ✓ Lines Look Good — Post
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ═══ DUPLICATE DETECTION MODAL ═══ */}
+            {/* ═══ DUPLICATE DETECTION MODAL ═══ */}
       {duplicateCheck && (
         <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
           <div style={{background:"#0d1b35",border:"1px solid rgba(245,158,11,0.3)",borderRadius:16,padding:28,maxWidth:480,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,0.5)"}}>
