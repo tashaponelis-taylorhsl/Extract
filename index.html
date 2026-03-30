@@ -358,17 +358,20 @@ function App() {
           }).catch(e => setAuthError(e.message));
         } else if (saved.type === "qbo") {
           const realmId = params.get("realmId");
-          exchangeQboCode(code, saved.clientId, saved.clientSecret).then(({accessToken}) => {
+          exchangeQboCode(code, saved.clientId, saved.clientSecret).then(({accessToken, refreshToken, tokenExpiry}) => {
             setClients(prev => {
               const updated = prev.map(c => c.id === saved.clientId_extract
-                ? {...c, qboToken: accessToken, qboRealmId: realmId, qboConnected: true}
+                ? {...c, qboToken: accessToken, qboRefreshToken: refreshToken, qboTokenExpiry: tokenExpiry, qboRealmId: realmId, qboConnected: true}
                 : c
               );
               localStorage.setItem("extract_clients", JSON.stringify(updated));
+              // Save to KV immediately so bookkeepers get the token
+              const lightweight = updated.map(c => { const {chartOfAccounts,...r} = c; return r; });
+              kvSet(`clients:${KV_USER}`, lightweight).catch(e => console.warn("KV save failed:", e));
               return updated;
             });
             setView(VIEWS.CLIENTS);
-            alert("✅ QuickBooks Online connected! Company ID: " + realmId);
+            alert("✅ QuickBooks Online connected! Token will auto-refresh — no more hourly reconnects!");
           }).catch(e => alert("QBO connection failed: " + e.message));
         }
       }
@@ -597,24 +600,102 @@ function App() {
     });
     const d = await res.json();
     if (d.error) throw new Error(d.error);
-    return { accessToken: d.access_token };
+    return { 
+      accessToken: d.access_token,
+      refreshToken: d.refresh_token,
+      expiresIn: d.expires_in || 3600,
+      tokenExpiry: Date.now() + ((d.expires_in || 3600) * 1000)
+    };
+  }
+
+  async function refreshQboToken(client) {
+    if (!client.qboRefreshToken) throw new Error("No refresh token — please reconnect QBO");
+    const res = await fetch(`${PROXY}/api/qbo-token`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({ 
+        refreshToken: client.qboRefreshToken,
+        clientId: client.qboClientId, 
+        clientSecret: client.qboClientSecret,
+        grantType: "refresh_token"
+      })
+    });
+    const d = await res.json();
+    if (d.error) throw new Error("Token refresh failed: " + d.error);
+    const newToken = d.access_token;
+    const newRefresh = d.refresh_token || client.qboRefreshToken;
+    const newExpiry = Date.now() + ((d.expires_in || 3600) * 1000);
+    // Update client with new tokens
+    const updated = clients.map(c => c.id === client.id 
+      ? {...c, qboToken: newToken, qboRefreshToken: newRefresh, qboTokenExpiry: newExpiry}
+      : c
+    );
+    saveClients(updated);
+    // Save to KV so all users get new token
+    const lightweight = updated.map(c => { const {chartOfAccounts,...rest} = c; return rest; });
+    kvSet(`clients:${KV_USER}`, lightweight).catch(e => console.warn("KV token save failed:", e));
+    console.log("✅ QBO token refreshed automatically");
+    return {...client, qboToken: newToken, qboRefreshToken: newRefresh, qboTokenExpiry: newExpiry};
+  }
+
+  async function getValidQboClient(client) {
+    // Check if token is expired or about to expire (within 5 minutes)
+    const expiry = client.qboTokenExpiry || 0;
+    const fiveMinutes = 5 * 60 * 1000;
+    if (expiry && Date.now() > expiry - fiveMinutes) {
+      console.log("QBO token expiring soon — refreshing automatically...");
+      try {
+        return await refreshQboToken(client);
+      } catch(e) {
+        console.warn("Auto-refresh failed:", e.message);
+        return client; // Return original and let the API call fail naturally
+      }
+    }
+    return client;
   }
 
   // ── QBO API calls ──
   async function qboGet(client, path) {
+    const validClient = await getValidQboClient(client);
     const res = await fetch(`${PROXY}/api/qbo`, {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ token: client.qboToken, realmId: client.qboRealmId, method:"GET", path, env: client.qboEnv || "sandbox" })
+      body: JSON.stringify({ token: validClient.qboToken, realmId: validClient.qboRealmId, method:"GET", path, env: validClient.qboEnv || "sandbox" })
     });
-    return res.json();
+    const data = await res.json();
+    // If 401, try refreshing token once
+    if (data.fault?.error?.[0]?.code === "3200" || res.status === 401) {
+      console.log("QBO 401 — attempting token refresh...");
+      try {
+        const refreshed = await refreshQboToken(validClient);
+        const res2 = await fetch(`${PROXY}/api/qbo`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ token: refreshed.qboToken, realmId: refreshed.qboRealmId, method:"GET", path, env: refreshed.qboEnv || "sandbox" })
+        });
+        return res2.json();
+      } catch(e) { console.warn("Refresh failed:", e.message); }
+    }
+    return data;
   }
 
   async function qboPost(client, path, body) {
+    const validClient = await getValidQboClient(client);
     const res = await fetch(`${PROXY}/api/qbo`, {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({ token: client.qboToken, realmId: client.qboRealmId, method:"POST", path, body, env: client.qboEnv || "sandbox" })
+      body: JSON.stringify({ token: validClient.qboToken, realmId: validClient.qboRealmId, method:"POST", path, body, env: validClient.qboEnv || "sandbox" })
     });
-    return res.json();
+    const data = await res.json();
+    // If 401, try refreshing token once
+    if (data.fault?.error?.[0]?.code === "3200" || res.status === 401) {
+      console.log("QBO 401 — attempting token refresh...");
+      try {
+        const refreshed = await refreshQboToken(validClient);
+        const res2 = await fetch(`${PROXY}/api/qbo`, {
+          method:"POST", headers:{"Content-Type":"application/json"},
+          body: JSON.stringify({ token: refreshed.qboToken, realmId: refreshed.qboRealmId, method:"POST", path, body, env: refreshed.qboEnv || "sandbox" })
+        });
+        return res2.json();
+      } catch(e) { console.warn("Refresh failed:", e.message); }
+    }
+    return data;
   }
 
   async function loadChartOfAccounts(client) {
