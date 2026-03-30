@@ -1612,7 +1612,9 @@ function App() {
         // Already posted — show in status and auto-dismiss
         const rec = existingRecord;
         setPostStatus(s=>({...s,[ri]:{status:"already_posted", qboId: rec.qboId, txType: rec.txType, processedAt: rec.processedAt}}));
-        setTimeout(() => dismissResult(ri), 5000);
+        setTimeout(() => {
+          setResults(prev => prev.filter((_,i) => i !== ri));
+        }, 5000);
         return;
       }
       // Mark as processed — use fileId for Teams files, generate ID for uploads
@@ -1631,7 +1633,9 @@ function App() {
       const cfPopulated = buildCustomFields(currentClient||client, ex.taxInvoiceNumber||null).length > 0;
       setPostStatus(s=>({...s,[ri]:{status:"posted", qboId: txId, txType, taxInvField: cfPopulated ? ex.taxInvoiceNumber : null}}));
       // Auto-dismiss after 4 seconds
-      setTimeout(() => dismissResult(ri), 4000);
+      setTimeout(() => {
+        setResults(prev => prev.filter((_,i) => i !== ri));
+      }, 4000);
     } catch(e) {
       logError("QBO Post Failed", e, { clientName: client.name, fileName: result.file, realmId: client.qboRealmId });
       setPostStatus(s=>({...s,[ri]:{status:"error", error: e.message}}));
