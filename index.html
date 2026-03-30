@@ -961,23 +961,18 @@ function App() {
 
   function buildRefNumber(extracted, fileName, txType) {
     if (!extracted) return { refNo: "", flagMissing: false };
-    // For Expenses (petty cash):
-    // Priority: voucherNumber from doc > voucher from filename > blank
-    // If supplier invoice also present: PC1234/INV123
     if (txType === "Expense" || txType === "Purchase Order") {
+      // Expenses: DocNumber = voucher number ONLY (PC2603109)
+      // Tax invoice number goes to custom field, supplier inv goes to memo
       const voucher = extracted.voucherNumber || extractVoucherFromFilename(fileName);
-      const supplierInv = extracted.documentNumber;
-      if (voucher && supplierInv && supplierInv !== voucher) {
-        return { refNo: `${voucher}/${supplierInv}`, flagMissing: false };
-      } else if (voucher) {
-        return { refNo: voucher, flagMissing: false };
+      if (voucher) {
+        return { refNo: voucher.slice(0, 21), flagMissing: false };
       } else {
-        // No voucher found — leave blank and flag
         return { refNo: "", flagMissing: true };
       }
     }
-    // For Bills: use supplier invoice number directly
-    return { refNo: extracted.documentNumber || "", flagMissing: false };
+    // Bills: DocNumber = supplier invoice number only (truncated to 21)
+    return { refNo: (extracted.documentNumber || "").slice(0, 21), flagMissing: false };
   }
 
   // ── Period Management ───────────────────────────────────────────────
@@ -1517,7 +1512,7 @@ function App() {
             Amount: Math.abs(l.amount),
             DetailType: "AccountBasedExpenseLineDetail",
             AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
-            Description: l.description
+            Description: (l.description||"").slice(0, 4000)
           })),
           ...vatLines
         ];
@@ -1525,7 +1520,7 @@ function App() {
           VendorRef: vendorRef,
           TxnDate: ex.documentDate,
           DueDate: ex.dueDate || ex.documentDate,
-          DocNumber: refNo || ex.documentNumber,
+          DocNumber: (refNo || ex.documentNumber||"").slice(0, 21),
           CustomField: buildCustomFields(client, ex.taxInvoiceNumber||null),
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | VAT: ${vatType==="confirmed"?"Confirmed ✅":vatType==="pending"?"Pending ⏳":"Not claimed ❌"} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
           Line: allLines.filter(l => l.Amount > 0)
@@ -1563,7 +1558,7 @@ function App() {
           // EntityRef is optional for petty cash — only include if vendor was matched
           ...(vendorRef ? { EntityRef: vendorRef } : {}),
           TxnDate: ex.documentDate,
-          DocNumber: refNo,
+          DocNumber: (refNo||"").slice(0, 21),
           CustomField: buildCustomFields(client, ex.taxInvoiceNumber||null),
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | Voucher: ${ex.voucherNumber||extractVoucherFromFilename(result.file)||""} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
           // Line amounts are already ex-VAT — do NOT subtract VAT again
@@ -1573,7 +1568,7 @@ function App() {
               Amount: Math.abs(l.amount),
               DetailType: "AccountBasedExpenseLineDetail",
               AccountBasedExpenseLineDetail: { AccountRef: l.accountRef },
-              Description: l.description
+              Description: (l.description||"").slice(0, 4000)
             })),
             ...vatLines
           ].filter(l => l.Amount > 0)
