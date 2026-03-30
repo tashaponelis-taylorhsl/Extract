@@ -1807,24 +1807,63 @@ function App() {
       onStatus("AI analyzing text...");
       return await analyzeText(text, fileName, prompt);
     } else {
-      const imageContents=[];
+      // Step 1: Use Google Vision API for accurate Thai OCR on each page
+      let combinedText = "";
+      let visionFailed = false;
       for(let i=1;i<=numPages;i++){
-        onStatus(`OCR page ${i} of ${numPages}...`);
+        onStatus(`Reading page ${i} of ${numPages}...`);
         const page=await pdf.getPage(i);
         const b64=await renderPageToBase64(page);
-        imageContents.push({type:"image",source:{type:"base64",media_type:"image/jpeg",data:b64}});
-        // Add page label between images so AI knows page order
         let pageNote = "";
         if (i === 1 && numPages > 1) {
-          pageNote = " — THIS IS PAGE 1: LIKELY A SUMMARY SHEET ONLY. DO NOT extract line items, vendor details, tax invoice info, or compliance data from this page. Wait for page 2+.";
-        } else if (i > 1) {
-          pageNote = ` — THIS IS PAGE ${i}: THIS IS THE ACTUAL SUPPLIER INVOICE/RECEIPT. Extract ALL line items, vendor details, tax invoice heading, VAT, and compliance data FROM THIS PAGE.`;
+          pageNote = "THIS IS PAGE 1: SUMMARY SHEET ONLY — do not extract line items from this page.";
+        } else {
+          pageNote = `THIS IS PAGE ${i}: ACTUAL SUPPLIER INVOICE/RECEIPT — extract ALL data from this page.`;
         }
-        imageContents.push({type:"text",text:`[PAGE ${i} OF ${numPages}${pageNote}]`});
+        try {
+          const visionRes = await fetch(`${PROXY}/api/vision`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ image: b64 })
+          });
+          const visionData = await visionRes.json();
+          if (visionData.text && visionData.text.trim()) {
+            combinedText += `
+
+--- PAGE ${i} OF ${numPages} (${pageNote}) ---
+${visionData.text}`;
+            console.log(`Page ${i} Google Vision OCR success: ${visionData.text.slice(0,80)}...`);
+          } else {
+            console.warn(`Page ${i} Vision returned no text:`, visionData.error);
+            visionFailed = true;
+          }
+        } catch(e) {
+          console.warn(`Page ${i} Vision API failed:`, e.message);
+          visionFailed = true;
+        }
       }
-      imageContents.push({type:"text",text:`Extract accounting data from this scanned document (file: ${fileName}). May be Thai or English. Prioritize supplier invoice pages over summary pages.`});
-      onStatus("AI vision OCR...");
-      return await analyzeImages(imageContents, prompt);
+
+      if (combinedText.trim()) {
+        // Step 2: Send accurately OCR'd text to Claude for translation + classification
+        onStatus("AI analyzing text...");
+        console.log("Google Vision combined text:", combinedText.slice(0, 300));
+        return await analyzeText(combinedText, fileName, prompt);
+      } else {
+        // Fallback to Claude Vision if Google Vision fails
+        console.warn("Google Vision failed — falling back to Claude Vision");
+        const imageContents=[];
+        for(let i=1;i<=numPages;i++){
+          onStatus(`Claude OCR page ${i} of ${numPages}...`);
+          const page=await pdf.getPage(i);
+          const b64=await renderPageToBase64(page);
+          let pageNote = i===1&&numPages>1?" — SUMMARY SHEET, skip line items":" — SUPPLIER INVOICE, extract all data";
+          imageContents.push({type:"image",source:{type:"base64",media_type:"image/jpeg",data:b64}});
+          imageContents.push({type:"text",text:`[PAGE ${i} OF ${numPages}${pageNote}]`});
+        }
+        imageContents.push({type:"text",text:`Extract accounting data from this scanned document (file: ${fileName}). May be Thai or English.`});
+        onStatus("AI vision OCR (fallback)...");
+        return await analyzeImages(imageContents, prompt);
+      }
     }
   }
 
