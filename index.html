@@ -35,7 +35,7 @@ const GRAPH_SCOPES = ["Files.Read.All","Sites.Read.All","offline_access","openid
 const QBO_SCOPES = "com.intuit.quickbooks.accounting openid profile email phone address";
 const QBO_SANDBOX_BASE = "https://sandbox-quickbooks.api.intuit.com/v3/company";
 
-const VIEWS = { HOME:"home", CLIENTS:"clients", EDIT_CLIENT:"edit_client", PROCESS:"process", HISTORY:"history", SETTINGS:"settings", SUPPORT:"support", USERS:"users" };
+const VIEWS = { HOME:"home", CLIENTS:"clients", EDIT_CLIENT:"edit_client", PROCESS:"process", HISTORY:"history", PRODUCTS:"products", SETTINGS:"settings", SUPPORT:"support", USERS:"users" };
 const ADMIN_EMAIL = "tasha.ponelis@taylorhsl.com";
 const TRUSTED_DOMAIN = "taylorhsl.com";
 const STAGES = { IDLE:"idle", EXTRACTING:"extracting", ANALYZING:"analyzing", DONE:"done", POSTING:"posting", BROWSING:"browsing", CONNECTING:"connecting" };
@@ -269,6 +269,8 @@ function App() {
   const [usersData, setUsersData] = useState([]);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState("");
+  const [newProductThai, setNewProductThai] = useState("");
+  const [newProductEnglish, setNewProductEnglish] = useState("");
   const [userLoading, setUserLoading] = useState(false);
   const fileInputRef = useRef();
 
@@ -2260,7 +2262,7 @@ ${text.slice(0,12000)}`}]})});
 
         {/* Nav */}
         <div style={{marginLeft: currentUser ? 16 : "auto",display:"flex",gap:8,alignItems:"center"}}>
-          {[{v:VIEWS.PROCESS,l:"📄 Process"},{v:VIEWS.CLIENTS,l:"🏢 Clients"},{v:VIEWS.HISTORY,l:"📋 History"},{v:VIEWS.USERS,l:"👥 Users"},{v:VIEWS.SETTINGS,l:"⚙ Settings"},{v:VIEWS.SUPPORT,l:"❓ Support"}].map(({v,l})=>(
+          {[{v:VIEWS.PROCESS,l:"📄 Process"},{v:VIEWS.CLIENTS,l:"🏢 Clients"},{v:VIEWS.HISTORY,l:"📋 History"},{v:VIEWS.PRODUCTS,l:"🗂️ Products"},{v:VIEWS.USERS,l:"👥 Users"},{v:VIEWS.SETTINGS,l:"⚙ Settings"},{v:VIEWS.SUPPORT,l:"❓ Support"}].map(({v,l})=>(
             <button key={v} onClick={()=>setView(v)} style={{...btnSecondary,borderColor:view===v?"#3b82f6":"#1e3a5f",color:view===v?"#3b82f6":"#64748b"}}>{l}</button>
           ))}
           <input type="file" id="import-client" accept=".json" onChange={importClient} style={{display:"none"}}/>
@@ -2648,6 +2650,162 @@ ${text.slice(0,12000)}`}]})});
                 setView(VIEWS.CLIENTS);
               }}>💾 Save Client</button>
             </div>
+          </div>
+        )}
+
+        {/* ═══ PRODUCTS ═══ */}
+        {view===VIEWS.PRODUCTS && (
+          <div style={{animation:"fadeUp 0.3s ease",maxWidth:760}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:24,flexWrap:"wrap",gap:12}}>
+              <div>
+                <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>PRODUCT MAPPING</div>
+                <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9"}}>
+                  {currentClient ? currentClient.name : "Select a client above"}
+                </div>
+              </div>
+            </div>
+
+            {!activeClient && (
+              <div style={{...card,padding:40,textAlign:"center",color:"#475569"}}>
+                <div style={{fontSize:32,marginBottom:12}}>🗂️</div>
+                <div>Select a client from the dropdown above to manage product mappings</div>
+              </div>
+            )}
+
+            {activeClient && currentClient && (
+              <div>
+                <div style={{...card,padding:20,marginBottom:16}}>
+                  <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:8}}>ABOUT PRODUCT MAPPING</div>
+                  <div style={{fontSize:12,color:"#475569",lineHeight:1.7}}>
+                    Teach the app Thai product names to improve OCR accuracy on handwritten invoices.
+                    These mappings apply to all vendors for this client — the more entries, the more accurate the translations.
+                  </div>
+                </div>
+
+                {/* Add new mapping */}
+                <div style={{...card,padding:20,marginBottom:16}}>
+                  <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:12}}>ADD PRODUCT</div>
+                  <div style={{display:"flex",gap:10,alignItems:"flex-end",flexWrap:"wrap"}}>
+                    <div style={{flex:1,minWidth:160}}>
+                      <label style={labelStyle}>Thai (as written on invoice)</label>
+                      <input value={newProductThai} onChange={e=>setNewProductThai(e.target.value)}
+                        placeholder="e.g. กล้วยหอม" style={{...inputStyle,fontFamily:"monospace"}}
+                        onKeyDown={e=>{
+                          if(e.key==="Enter" && newProductThai.trim() && newProductEnglish.trim()){
+                            const dict = Object.assign({}, currentClient.productDict||{});
+                            dict[newProductThai.trim()] = newProductEnglish.trim();
+                            const updated = safeClients.map(c=>c.id===activeClient ? Object.assign({},c,{productDict:dict}) : c);
+                            saveClients(updated);
+                            setNewProductThai(""); setNewProductEnglish("");
+                          }
+                        }}
+                      />
+                    </div>
+                    <div style={{flex:1,minWidth:160}}>
+                      <label style={labelStyle}>English translation</label>
+                      <input value={newProductEnglish} onChange={e=>setNewProductEnglish(e.target.value)}
+                        placeholder="e.g. Bananas" style={inputStyle}
+                        onKeyDown={e=>{
+                          if(e.key==="Enter" && newProductThai.trim() && newProductEnglish.trim()){
+                            const dict = Object.assign({}, currentClient.productDict||{});
+                            dict[newProductThai.trim()] = newProductEnglish.trim();
+                            const updated = safeClients.map(c=>c.id===activeClient ? Object.assign({},c,{productDict:dict}) : c);
+                            saveClients(updated);
+                            setNewProductThai(""); setNewProductEnglish("");
+                          }
+                        }}
+                      />
+                    </div>
+                    <button className="btn" style={{...btnPrimary,flexShrink:0,padding:"9px 20px"}} onClick={()=>{
+                      if(!newProductThai.trim() || !newProductEnglish.trim()){alert("Please enter both Thai and English");return;}
+                      const dict = Object.assign({}, currentClient.productDict||{});
+                      dict[newProductThai.trim()] = newProductEnglish.trim();
+                      const updated = safeClients.map(c=>c.id===activeClient ? Object.assign({},c,{productDict:dict}) : c);
+                      saveClients(updated);
+                      setNewProductThai(""); setNewProductEnglish("");
+                    }}>+ Add</button>
+                  </div>
+                  <div style={{fontSize:10,color:"#334155",marginTop:8}}>💡 Press Enter after typing English to quickly add multiple entries</div>
+                </div>
+
+                {/* Quick add presets */}
+                <div style={{...card,padding:20,marginBottom:16}}>
+                  <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:12}}>QUICK ADD COMMON CATEGORIES</div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                    {[
+                      {label:"🍎 Fruits", count:17, key:"fruits"},
+                      {label:"🥦 Vegetables", count:14, key:"veg"},
+                      {label:"🥩 Meat & Seafood", count:10, key:"meat"},
+                    ].map(function(cat){
+                      return (
+                        <button key={cat.key} className="btn" style={{...btnSecondary,fontSize:11,padding:"7px 14px"}} onClick={function(){
+                          var presets = {
+                            fruits: {"กล้วยหอม":"Bananas","แตงโม":"Watermelon","สับปะรด":"Pineapple","มะม่วง":"Mangoes","ฝรั่ง":"Guava","ส้มโอ":"Pomelo","ลิ้นจี่":"Lychee","มังคุด":"Mangosteen","องุ่น":"Grapes","ส้ม":"Orange","มะละกอ":"Papaya","มะพร้าว":"Coconut","ทุเรียน":"Durian","เงาะ":"Rambutan","ลองกอง":"Longkong","ชมพู่":"Rose Apple","แอปเปิ้ล":"Apple"},
+                            veg: {"กะหล่ำปลี":"Cabbage","มะเขือเทศ":"Tomatoes","หอมใหญ่":"Onions","ต้นหอม":"Spring Onions","ขิง":"Ginger","ตะไคร้":"Lemongrass","พริก":"Chilli","กระเทียม":"Garlic","มะนาว":"Lime","ผักบุ้ง":"Morning Glory","แครอต":"Carrots","ข่า":"Galangal","ผักชี":"Coriander","ใบมะกรูด":"Kaffir Lime Leaves"},
+                            meat: {"เนื้อหมู":"Pork","เนื้อไก่":"Chicken","เนื้อวัว":"Beef","กุ้ง":"Prawns","ปลา":"Fish","หมูสับ":"Minced Pork","ซี่โครงหมู":"Pork Ribs","อกไก่":"Chicken Breast","น่องไก่":"Chicken Thigh","หอย":"Oysters"}
+                          };
+                          var items = presets[cat.key] || {};
+                          var dict = Object.assign({}, currentClient.productDict||{}, items);
+                          var updated = safeClients.map(function(c){return c.id===activeClient ? Object.assign({},c,{productDict:dict}) : c;});
+                          saveClients(updated);
+                          alert("Added " + Object.keys(items).length + " " + cat.label + " products!");
+                        }}>
+                          {cat.label} ({cat.count})
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div style={{fontSize:10,color:"#334155",marginTop:8}}>Click to bulk-add common product categories as a starting point</div>
+                </div>
+
+                {/* Product list */}
+                <div style={{...card,overflow:"hidden"}}>
+                  <div style={{padding:"12px 18px",borderBottom:"1px solid #162032",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{fontSize:11,color:"#475569",letterSpacing:"0.1em"}}>
+                      {Object.keys(currentClient.productDict||{}).length} PRODUCTS MAPPED
+                    </div>
+                    {Object.keys(currentClient.productDict||{}).length > 0 && (
+                      <button className="btn" style={{...btnSecondary,fontSize:10,padding:"3px 10px",color:"#ef4444",borderColor:"rgba(239,68,68,0.3)"}} onClick={function(){
+                        if(confirm("Clear all product mappings for this client?")){
+                          var updated = safeClients.map(function(c){return c.id===activeClient ? Object.assign({},c,{productDict:{}}) : c;});
+                          saveClients(updated);
+                        }
+                      }}>🗑️ Clear All</button>
+                    )}
+                  </div>
+
+                  {Object.keys(currentClient.productDict||{}).length === 0 && (
+                    <div style={{padding:40,textAlign:"center",color:"#334155"}}>
+                      <div style={{fontSize:28,marginBottom:12}}>🗂️</div>
+                      <div>No product mappings yet.</div>
+                      <div style={{fontSize:12,marginTop:4}}>Add products above or use the Quick Add buttons to get started.</div>
+                    </div>
+                  )}
+
+                  {Object.entries(currentClient.productDict||{}).map(function(entry){
+                    var thai = entry[0]; var english = entry[1];
+                    return (
+                      <div key={thai} className="rh" style={{padding:"11px 18px",borderBottom:"1px solid rgba(22,32,50,0.6)",display:"flex",gap:16,alignItems:"center",fontSize:13}}>
+                        <div style={{flex:1,fontFamily:"monospace",color:"#e2e8f0",fontSize:14}}>{thai}</div>
+                        <div style={{flex:1,color:"#94a3b8"}}>{english}</div>
+                        <button onClick={function(){
+                          var dict = Object.assign({}, currentClient.productDict||{});
+                          delete dict[thai];
+                          var updated = safeClients.map(function(c){return c.id===activeClient ? Object.assign({},c,{productDict:dict}) : c;});
+                          saveClients(updated);
+                        }} style={{background:"transparent",border:"1px solid rgba(239,68,68,0.3)",borderRadius:4,color:"#ef4444",cursor:"pointer",fontSize:11,padding:"3px 10px"}}>
+                          Del
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div style={{marginTop:16,padding:12,background:"rgba(59,130,246,0.05)",border:"1px solid rgba(59,130,246,0.1)",borderRadius:8,fontSize:12,color:"#475569"}}>
+                  ☁️ Product mappings are saved automatically and synced to cloud when you click Sync on the client card.
+                </div>
+              </div>
+            )}
           </div>
         )}
 
