@@ -1632,9 +1632,15 @@ function App() {
 
       const cfPopulated = buildCustomFields(currentClient||client, ex.taxInvoiceNumber||null).length > 0;
       setPostStatus(s=>({...s,[ri]:{status:"posted", qboId: txId, txType, taxInvField: cfPopulated ? ex.taxInvoiceNumber : null}}));
-      // Auto-dismiss after 4 seconds
+      // Auto-dismiss after 4 seconds — capture fileId not index
+      const dismissFileId = result.fileId || result.file;
       setTimeout(() => {
-        setResults(prev => prev.filter((_,i) => i !== ri));
+        setResults(prev => prev.filter(r => (r.fileId || r.file) !== dismissFileId));
+        setPostStatus(prev => {
+          const next = {...prev};
+          delete next[ri];
+          return next;
+        });
       }, 4000);
     } catch(e) {
       logError("QBO Post Failed", e, { clientName: client.name, fileName: result.file, realmId: client.qboRealmId });
