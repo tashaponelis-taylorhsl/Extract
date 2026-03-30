@@ -272,6 +272,22 @@ function App() {
   const [userLoading, setUserLoading] = useState(false);
   const fileInputRef = useRef();
 
+  // Auto-dismiss posted results after 4 seconds
+  useEffect(() => {
+    const postedEntries = Object.entries(postStatus).filter(([,ps]) => ps.status === "posted" || ps.status === "already_posted");
+    if (postedEntries.length === 0) return;
+    const timer = setTimeout(() => {
+      const postedKeys = new Set(postedEntries.map(([k]) => k));
+      setResults(prev => prev.filter((_, i) => !postedKeys.has(String(i))));
+      setPostStatus(prev => {
+        const next = {...prev};
+        postedKeys.forEach(k => delete next[k]);
+        return next;
+      });
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [postStatus]);
+
   // Load saved data
   useEffect(() => {
     try {
@@ -1054,25 +1070,30 @@ function App() {
         if (effectiveConfidence >= 50) {
           const existingDate = best.TxnDate || "";
           const existingRef = best.DocNumber || best.Id;
-          const hasTaxInvoice = ex.taxInvoiceNumber && ex.taxInvoiceNumber !== ex.documentNumber;
+          const hasTaxInvoice = !!(ex.taxInvoiceNumber && ex.taxInvoiceNumber !== ex.documentNumber);
           const amountDiff = Math.abs((ex.totalAmount||0) - (best.TotalAmt||0));
+          const existingVendor = best.VendorRef?.name||best.EntityRef?.name||"";
 
-          const action = window.confirm(
-            `⚠️ POSSIBLE DUPLICATE DETECTED (${effectiveConfidence}% match)\n\n` +
-            `Existing in QBO:\n` +
-            `${best._type} #${existingRef} — ${best.VendorRef?.name||best.EntityRef?.name||""}\n` +
-            `Amount: ฿${best.TotalAmt} | Date: ${existingDate}\n\n` +
-            `Current document:\n` +
-            `${ex.transactionType} — ${ex.vendor}\n` +
-            `Amount: ฿${ex.totalAmount} | Date: ${ex.documentDate}\n` +
-            `${amountDiff > 0 ? "⚠️ Amount difference: ฿"+amountDiff.toFixed(2)+" (rounding?)\n" : ""}` +
-            `${hasTaxInvoice ? "Tax Invoice: "+ex.taxInvoiceNumber+"\n" : ""}\n` +
-            `Click OK to UPDATE existing transaction${hasTaxInvoice ? " — adds tax invoice number & PDF" : " — attaches PDF"}.\n` +
-            `Click Cancel to CREATE a new transaction instead.`
-          );
+          // Show proper duplicate modal
+          const action = await new Promise(resolve => {
+            setDuplicateCheck({
+              resolve,
+              existing: { type: best._type, ref: existingRef, vendor: existingVendor, amount: best.TotalAmt, date: existingDate, id: best.Id },
+              current: { vendor: ex.vendor, amount: ex.totalAmount, date: ex.documentDate, taxInvoice: hasTaxInvoice ? ex.taxInvoiceNumber : null },
+              confidence: effectiveConfidence,
+              amountDiff,
+              ri,
+            });
+          });
+          setDuplicateCheck(null);
 
-          if (action) {
-            // Update existing transaction + create VAT journal entry if needed
+          if (action === "dismiss") {
+            setTimeout(() => setResults(prev => prev.filter((_,i) => i !== ri)), 100);
+            return;
+          }
+
+          if (action !== "new") {
+            // update or attach
             setPostStatus(s=>({...s,[ri]:{status:"posting", message:"Updating existing transaction..."}}));
             const updateResult = await updateExistingTransaction(
               client, best,
@@ -1080,11 +1101,7 @@ function App() {
               result.fileData, result.file
             );
             if (updateResult.success) {
-              // Show attachment error if PDF failed
-              if (updateResult.attachError) {
-                console.warn("PDF attachment error:", updateResult.attachError);
-              }
-              // If original was posted with pending VAT, create journal to move to confirmed
+              if (updateResult.attachError) console.warn("PDF attachment error:", updateResult.attachError);
               if (ex.vatAmount > 0 && (best.PrivateNote||"").includes("Pending")) {
                 try {
                   setPostStatus(s=>({...s,[ri]:{status:"posting", message:"Creating VAT transfer journal..."}}));
@@ -1095,18 +1112,19 @@ function App() {
                   );
                   setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true, journalId}}));
                 } catch(e) {
-                  // Still mark as updated even if journal fails
                   setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true, journalError:e.message}}));
                 }
               } else {
                 setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true}}));
               }
+              // Auto-dismiss after update
+              setTimeout(() => setResults(prev => prev.filter((_,i) => i !== ri)), 4000);
             } else {
               setPostStatus(s=>({...s,[ri]:{status:"error", error:"Update failed: "+updateResult.error}}));
             }
             return;
           }
-          // User chose to create new — fall through to normal posting
+          // action === "new" — fall through to normal posting
         }
       }
     }
@@ -1632,16 +1650,7 @@ function App() {
 
       const cfPopulated = buildCustomFields(currentClient||client, ex.taxInvoiceNumber||null).length > 0;
       setPostStatus(s=>({...s,[ri]:{status:"posted", qboId: txId, txType, taxInvField: cfPopulated ? ex.taxInvoiceNumber : null}}));
-      // Auto-dismiss after 4 seconds — capture fileId not index
-      const dismissFileId = result.fileId || result.file;
-      setTimeout(() => {
-        setResults(prev => prev.filter(r => (r.fileId || r.file) !== dismissFileId));
-        setPostStatus(prev => {
-          const next = {...prev};
-          delete next[ri];
-          return next;
-        });
-      }, 4000);
+      // Auto-dismiss handled by useEffect watching postStatus
     } catch(e) {
       logError("QBO Post Failed", e, { clientName: client.name, fileName: result.file, realmId: client.qboRealmId });
       setPostStatus(s=>({...s,[ri]:{status:"error", error: e.message}}));
@@ -3272,6 +3281,38 @@ ${text.slice(0,12000)}`}]})});
               <button onClick={()=>{lineReviewResolveRef.current?.(lineReviewModal.lines);lineReviewResolveRef.current=null;setLineReviewModal(null);}} 
                 style={{padding:"9px 20px",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontSize:12,fontWeight:"bold"}}>
                 ✓ Lines Look Good — Post
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ DUPLICATE DETECTION MODAL ═══ */}
+      {duplicateCheck && (
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <div style={{background:"#0d1b35",border:"1px solid rgba(245,158,11,0.3)",borderRadius:16,padding:28,maxWidth:480,width:"100%",boxShadow:"0 20px 60px rgba(0,0,0,0.5)"}}>
+            <div style={{fontSize:13,color:"#f59e0b",fontWeight:"bold",marginBottom:16}}>⚠️ Possible Duplicate Detected ({duplicateCheck.confidence}% match)</div>
+            <div style={{padding:12,background:"rgba(22,32,50,0.6)",borderRadius:8,marginBottom:8,fontSize:12}}>
+              <div style={{color:"#475569",fontSize:10,marginBottom:4,letterSpacing:"0.1em"}}>EXISTING IN QBO</div>
+              <div style={{color:"#e2e8f0",fontWeight:"bold"}}>{duplicateCheck.existing.vendor}</div>
+              <div style={{color:"#64748b"}}>{duplicateCheck.existing.type} #{duplicateCheck.existing.ref} · ฿{(duplicateCheck.existing.amount||0).toLocaleString()} · {duplicateCheck.existing.date}</div>
+            </div>
+            <div style={{padding:12,background:"rgba(22,32,50,0.6)",borderRadius:8,marginBottom:16,fontSize:12}}>
+              <div style={{color:"#475569",fontSize:10,marginBottom:4,letterSpacing:"0.1em"}}>CURRENT DOCUMENT</div>
+              <div style={{color:"#e2e8f0",fontWeight:"bold"}}>{duplicateCheck.current.vendor}</div>
+              <div style={{color:"#64748b"}}>฿{(duplicateCheck.current.amount||0).toLocaleString()} · {duplicateCheck.current.date}</div>
+              {duplicateCheck.current.taxInvoice && <div style={{color:"#f59e0b",fontSize:11,marginTop:4}}>Tax Invoice: {duplicateCheck.current.taxInvoice}</div>}
+              {duplicateCheck.amountDiff > 0 && <div style={{color:"#f59e0b",fontSize:11,marginTop:4}}>⚠️ Amount difference: ฿{duplicateCheck.amountDiff.toFixed(2)}</div>}
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+              <button onClick={()=>duplicateCheck.resolve("update")} style={{padding:"12px 16px",background:"linear-gradient(135deg,#3b82f6,#06b6d4)",border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:"bold",textAlign:"left"}}>
+                🔄 Update existing — attach PDF{duplicateCheck.current.taxInvoice?" & add tax invoice":""}
+              </button>
+              <button onClick={()=>duplicateCheck.resolve("new")} style={{padding:"12px 16px",background:"rgba(16,185,129,0.08)",border:"1px solid rgba(16,185,129,0.3)",borderRadius:8,color:"#10b981",cursor:"pointer",fontSize:13,fontWeight:"bold",textAlign:"left"}}>
+                ➕ Post as new transaction anyway
+              </button>
+              <button onClick={()=>duplicateCheck.resolve("dismiss")} style={{padding:"12px 16px",background:"transparent",border:"1px solid #1e3a5f",borderRadius:8,color:"#64748b",cursor:"pointer",fontSize:13,textAlign:"left"}}>
+                ✕ Dismiss — remove from screen
               </button>
             </div>
           </div>
