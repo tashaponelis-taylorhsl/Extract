@@ -2593,28 +2593,7 @@ ${text.slice(0,12000)}`}]})});
                   <div style={{fontSize:10,color:"#334155",marginTop:4}}>Tip: separate multiple keywords with commas. Vendor names also work e.g. "7-Eleven → Office Supplies"</div>
                 </div>
 
-                {/* Product Dictionary */}
-                <div style={{marginBottom:16}}>
-                  <label style={labelStyle}>Product Dictionary</label>
-                  <div style={{fontSize:10,color:"#334155",marginBottom:6}}>Teach the app Thai product names to improve handwritten document accuracy. One per line: Thai = English</div>
-                  <textarea value={editingClient.productDictionary||""} onChange={e=>setEditingClient(c=>({...c,productDictionary:e.target.value}))}
-                    placeholder={"กล้วยหอม = Bananas
-แตงโม = Watermelon
-สับปะรด = Pineapple
-มะม่วง = Mangoes
-ฝรั่ง = Guava
-ส้มโอ = Pomelo
-ลิ้นจี่ = Lychee
-มังคุด = Mangosteen
-องุ่น = Grapes
-แอปเปิ้ล = Apple
-ส้ม = Orange
-มะละกอ = Papaya
-กล้วย = Banana
-มะพร้าว = Coconut"}
-                    style={{...inputStyle,height:160,resize:"vertical",lineHeight:1.8,fontFamily:"monospace",fontSize:12}}/>
-                  <div style={{fontSize:10,color:"#334155",marginTop:4}}>💡 Add any product you regularly buy in Thai. The more entries the more accurate handwritten OCR becomes.</div>
-                </div>
+                {/* Product Dictionary moved to Product Mapping tab */}
 
                 <div style={{marginBottom:14}}>
                   <label style={labelStyle}>QBO Environment</label>
