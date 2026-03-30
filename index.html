@@ -239,9 +239,7 @@ function App() {
   const [clients, setClients] = useState([]);
   const [activeClient, setActiveClient] = useState(null);
   const [editingClient, setEditingClient] = useState(null);
-  const [editTab, setEditTab] = useState("settings"); // settings | products
-  const [newProductThai, setNewProductThai] = useState("");
-  const [newProductEnglish, setNewProductEnglish] = useState("");
+
   const [settings, setSettings] = useState({ apiKey:"", msClientId:"", msTenantId:"" });
   const [results, setResults] = useState([]);
   const [selectedRows, setSelectedRows] = useState({});
@@ -2533,23 +2531,14 @@ ${text.slice(0,12000)}`}]})});
         {view===VIEWS.EDIT_CLIENT && editingClient && (
           <div style={{animation:"fadeUp 0.3s ease"}}>
             <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20}}>
-              <button className="btn" style={btnSecondary} onClick={()=>{setView(VIEWS.CLIENTS);setEditTab("settings");}}>← Back</button>
+              <button className="btn" style={btnSecondary} onClick={()=>setView(VIEWS.CLIENTS)}>← Back</button>
               <div style={{flex:1}}>
                 <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:2}}>{editingClient.name?"EDIT CLIENT":"NEW CLIENT"}</div>
                 <div style={{fontSize:18,fontWeight:"bold",color:"#f1f5f9"}}>{editingClient.name||"Configure Client"}</div>
               </div>
             </div>
 
-            {/* Tabs */}
-            <div style={{display:"flex",gap:4,marginBottom:20,borderBottom:"1px solid #162032",paddingBottom:0}}>
-              {[{id:"settings",label:"⚙️ Settings"},{id:"products",label:"🗂️ Product Mapping"}].map(t=>(
-                <button key={t.id} onClick={()=>setEditTab(t.id)} style={{padding:"8px 20px",background:"transparent",border:"none",borderBottom:`2px solid ${editTab===t.id?"#3b82f6":"transparent"}`,color:editTab===t.id?"#3b82f6":"#475569",cursor:"pointer",fontSize:13,fontWeight:editTab===t.id?"bold":"normal",marginBottom:-1}}>
-                  {t.label}
-                </button>
-              ))}
-            </div>
-
-            {editTab==="settings" && <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:20}}>
               {/* Basic Info */}
               <div style={{...card,padding:20}}>
                 <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:16}}>BASIC INFORMATION</div>
@@ -2652,139 +2641,18 @@ ${text.slice(0,12000)}`}]})});
 
             {/* Save buttons for settings tab */}
             <div style={{display:"flex",gap:10,marginTop:20,justifyContent:"flex-end"}}>
-              <button className="btn" style={btnSecondary} onClick={()=>{setView(VIEWS.CLIENTS);setEditTab("settings");}}>Cancel</button>
+              <button className="btn" style={btnSecondary} onClick={()=>setView(VIEWS.CLIENTS)}>Cancel</button>
               <button className="btn" style={btnPrimary} onClick={()=>{
                 if(!editingClient.name){alert("Please enter a client name.");return;}
                 const updated=[...clients.filter(c=>c.id!==editingClient.id),editingClient];
                 saveClients(updated);
                 setView(VIEWS.CLIENTS);
-                setEditTab("settings");
               }}>💾 Save Client</button>
             </div>
-          </div>}
+          </div>
 
-          {/* ═══ PRODUCT MAPPING TAB ═══ */}
-          {editTab==="products" && (
-            <div>
-              <div style={{...card,padding:20,marginBottom:16}}>
-                <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:4}}>PRODUCT MAPPING</div>
-                <div style={{fontSize:12,color:"#475569",marginBottom:16}}>
-                  Teach the app Thai product names to improve OCR accuracy on handwritten documents. 
-                  These mappings apply to all vendors for this client.
-                </div>
 
-                {/* Add new mapping */}
-                <div style={{display:"flex",gap:8,marginBottom:20,alignItems:"flex-end"}}>
-                  <div style={{flex:1}}>
-                    <label style={labelStyle}>Thai (as written on document)</label>
-                    <input value={newProductThai} onChange={e=>setNewProductThai(e.target.value)}
-                      placeholder="e.g. กล้วยหอม" style={{...inputStyle,fontFamily:"monospace"}}
-                      onKeyDown={e=>{
-                        if(e.key==="Enter" && newProductThai && newProductEnglish) {
-                          const dict = {...(editingClient.productDict||{})};
-                          dict[newProductThai.trim()] = newProductEnglish.trim();
-                          setEditingClient(c=>({...c,productDict:dict}));
-                          setNewProductThai("");
-                          setNewProductEnglish("");
-                        }
-                      }}
-                    />
-                  </div>
-                  <div style={{flex:1}}>
-                    <label style={labelStyle}>English translation</label>
-                    <input value={newProductEnglish} onChange={e=>setNewProductEnglish(e.target.value)}
-                      placeholder="e.g. Bananas" style={inputStyle}
-                      onKeyDown={e=>{
-                        if(e.key==="Enter" && newProductThai && newProductEnglish) {
-                          const dict = {...(editingClient.productDict||{})};
-                          dict[newProductThai.trim()] = newProductEnglish.trim();
-                          setEditingClient(c=>({...c,productDict:dict}));
-                          setNewProductThai("");
-                          setNewProductEnglish("");
-                        }
-                      }}
-                    />
-                  </div>
-                  <button className="btn" style={{...btnPrimary,padding:"9px 16px",flexShrink:0}} onClick={()=>{
-                    if (!newProductThai || !newProductEnglish) { alert("Please enter both Thai and English"); return; }
-                    const dict = {...(editingClient.productDict||{})};
-                    dict[newProductThai.trim()] = newProductEnglish.trim();
-                    setEditingClient(c=>({...c,productDict:dict}));
-                    setNewProductThai("");
-                    setNewProductEnglish("");
-                  }}>+ Add</button>
-                </div>
-
-                {/* Product mapping table */}
-                <div style={{border:"1px solid #162032",borderRadius:8,overflow:"hidden"}}>
-                  <div style={{padding:"10px 16px",background:"rgba(22,32,50,0.4)",display:"flex",gap:16,fontSize:11,color:"#334155",letterSpacing:"0.1em"}}>
-                    <span style={{flex:1}}>THAI</span>
-                    <span style={{flex:1}}>ENGLISH</span>
-                    <span style={{width:60}}></span>
-                  </div>
-                  {Object.keys(editingClient.productDict||{}).length === 0 && (
-                    <div style={{padding:32,textAlign:"center",color:"#334155",fontSize:13}}>
-                      <div style={{fontSize:24,marginBottom:8}}>🗂️</div>
-                      No product mappings yet. Add your first one above!
-                    </div>
-                  )}
-                  {Object.entries(editingClient.productDict||{}).map(([thai, english]) => (
-                    <div key={thai} style={{padding:"10px 16px",borderTop:"1px solid rgba(22,32,50,0.6)",display:"flex",gap:16,alignItems:"center",fontSize:13}} className="rh">
-                      <div style={{flex:1,fontFamily:"monospace",color:"#e2e8f0"}}>{thai}</div>
-                      <div style={{flex:1,color:"#94a3b8"}}>{english}</div>
-                      <button onClick={()=>{
-                        const dict = {...(editingClient.productDict||{})};
-                        delete dict[thai];
-                        setEditingClient(c=>({...c,productDict:dict}));
-                      }} style={{width:60,background:"transparent",border:"1px solid rgba(239,68,68,0.3)",borderRadius:4,color:"#ef4444",cursor:"pointer",fontSize:11,padding:"3px 0"}}>🗑️ Del</button>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={{fontSize:11,color:"#334155",marginTop:12}}>
-                  💡 Tip: Add common products you buy regularly. The more entries the better the OCR accuracy on handwritten documents. Press Enter to quickly add multiple entries.
-                </div>
-              </div>
-
-              {/* Preset categories */}
-              <div style={{...card,padding:20,marginBottom:16}}>
-                <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:12}}>QUICK ADD — COMMON CATEGORIES</div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                  {(()=>{
-                    const PRESETS = [
-                      {label:"Fruits", items:{"กล้วยหอม":"Bananas","แตงโม":"Watermelon","สับปะรด":"Pineapple","มะม่วง":"Mangoes","ฝรั่ง":"Guava","ส้มโอ":"Pomelo","ลิ้นจี่":"Lychee","มังคุด":"Mangosteen","องุ่น":"Grapes","ส้ม":"Orange","มะละกอ":"Papaya","มะพร้าว":"Coconut","ทุเรียน":"Durian","เงาะ":"Rambutan"}},
-                      {label:"Vegetables", items:{"กะหล่ำปลี":"Cabbage","มะเขือเทศ":"Tomatoes","หอมใหญ่":"Onions","ต้นหอม":"Spring Onions","ขิง":"Ginger","ตะไคร้":"Lemongrass","พริก":"Chilli","กระเทียม":"Garlic","มะนาว":"Lime"}},
-                      {label:"Meat", items:{"เนื้อหมู":"Pork","เนื้อไก่":"Chicken","เนื้อวัว":"Beef","กุ้ง":"Prawns","ปลา":"Fish","หมูสับ":"Minced Pork","ซี่โครงหมู":"Pork Ribs","อกไก่":"Chicken Breast","น่องไก่":"Chicken Thigh"}},
-                    ];
-                    return PRESETS.map(cat=>(
-                    <button key={cat.label} className="btn" style={{...btnSecondary,fontSize:11,padding:"6px 14px"}} onClick={()=>{
-                      const dict = {...(editingClient.productDict||{})};
-                      Object.assign(dict, cat.items);
-                      setEditingClient(c=>({...c,productDict:dict}));
-                      alert(`✅ Added ${Object.keys(cat.items).length} ${cat.label} mappings!`);
-                    }}>{cat.label} — Add All</button>
-                  ))}
-                </div>
-                <div style={{fontSize:10,color:"#334155",marginTop:8}}>Click to bulk add common product categories as a starting point</div>
-              </div>
-
-              <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-                <button className="btn" style={btnSecondary} onClick={()=>{setView(VIEWS.CLIENTS);setEditTab("settings");}}>Cancel</button>
-                <button className="btn" style={btnPrimary} onClick={()=>{
-                  if(!editingClient.name){alert("Please enter a client name.");return;}
-                  const updated=[...clients.filter(c=>c.id!==editingClient.id),editingClient];
-                  saveClients(updated);
-                  setView(VIEWS.CLIENTS);
-                  setEditTab("settings");
-                  alert(`✅ Saved ${Object.keys(editingClient.productDict||{}).length} product mappings!`);
-                }}>💾 Save Product Mappings</button>
-              </div>
-            </div>
-          )}
-        </div>
-        )}
-
-        {/* ═══ SETTINGS ═══ */}
+                {/* ═══ SETTINGS ═══ */}
         {view===VIEWS.SETTINGS && (
           <div style={{animation:"fadeUp 0.3s ease",maxWidth:600}}>
             <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>GLOBAL SETTINGS</div>
