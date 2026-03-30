@@ -1926,12 +1926,8 @@ function App() {
     // Build product dictionary section for prompt
     const productDict = client?.productDict || {};
     const productDictStr = Object.keys(productDict).length > 0
-      ? "
-
-PRODUCT DICTIONARY — use this to translate Thai product names accurately:
-" +
-        Object.entries(productDict).map(([thai, eng]) => `${thai} = ${eng}`).join("
-")
+      ? "\n\nPRODUCT DICTIONARY — use this to translate Thai product names accurately:\n" +
+        Object.entries(productDict).map(([thai, eng]) => thai + " = " + eng).join("\n")
       : "";
     const prompt = SYSTEM_PROMPT(coa, businessType, wfRules, client) + productDictStr;
 
@@ -2754,11 +2750,13 @@ ${text.slice(0,12000)}`}]})});
               <div style={{...card,padding:20,marginBottom:16}}>
                 <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.12em",marginBottom:12}}>QUICK ADD — COMMON CATEGORIES</div>
                 <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                  {[
-                    {label:"🍎 Fruits", items:{"กล้วยหอม":"Bananas","แตงโม":"Watermelon","สับปะรด":"Pineapple","มะม่วง":"Mangoes","ฝรั่ง":"Guava","ส้มโอ":"Pomelo","ลิ้นจี่":"Lychee","มังคุด":"Mangosteen","องุ่น":"Grapes","แอปเปิ้ล":"Apple","ส้ม":"Orange","มะละกอ":"Papaya","มะพร้าว":"Coconut","ทุเรียน":"Durian","ลองกอง":"Longkong","เงาะ":"Rambutan","ชมพู่":"Rose Apple"}},
-                    {label:"🥦 Vegetables", items:{"กะหล่ำปลี":"Cabbage","ผักบุ้ง":"Morning Glory","มะเขือเทศ":"Tomatoes","แครอท":"Carrots","หอมใหญ่":"Onions","ต้นหอม":"Spring Onions","ขิง":"Ginger","ข่า":"Galangal","ตะไคร้":"Lemongrass","พริก":"Chilli","ผักชี":"Coriander","กระเทียม":"Garlic","มะนาว":"Lime","ใบมะกรูด":"Kaffir Lime Leaves"}},
-                    {label:"🥩 Meat", items:{"เนื้อหมู":"Pork","เนื้อไก่":"Chicken","เนื้อวัว":"Beef","กุ้ง":"Prawns","ปลา":"Fish","หมูสับ":"Minced Pork","ไก่สับ":"Minced Chicken","ซี่โครงหมู":"Pork Ribs","อกไก่":"Chicken Breast","น่องไก่":"Chicken Thigh"}},
-                  ].map(cat=>(
+                  {(()=>{
+                    const PRESETS = [
+                      {label:"Fruits", items:{"กล้วยหอม":"Bananas","แตงโม":"Watermelon","สับปะรด":"Pineapple","มะม่วง":"Mangoes","ฝรั่ง":"Guava","ส้มโอ":"Pomelo","ลิ้นจี่":"Lychee","มังคุด":"Mangosteen","องุ่น":"Grapes","ส้ม":"Orange","มะละกอ":"Papaya","มะพร้าว":"Coconut","ทุเรียน":"Durian","เงาะ":"Rambutan"}},
+                      {label:"Vegetables", items:{"กะหล่ำปลี":"Cabbage","มะเขือเทศ":"Tomatoes","หอมใหญ่":"Onions","ต้นหอม":"Spring Onions","ขิง":"Ginger","ตะไคร้":"Lemongrass","พริก":"Chilli","กระเทียม":"Garlic","มะนาว":"Lime"}},
+                      {label:"Meat", items:{"เนื้อหมู":"Pork","เนื้อไก่":"Chicken","เนื้อวัว":"Beef","กุ้ง":"Prawns","ปลา":"Fish","หมูสับ":"Minced Pork","ซี่โครงหมู":"Pork Ribs","อกไก่":"Chicken Breast","น่องไก่":"Chicken Thigh"}},
+                    ];
+                    return PRESETS.map(cat=>(
                     <button key={cat.label} className="btn" style={{...btnSecondary,fontSize:11,padding:"6px 14px"}} onClick={()=>{
                       const dict = {...(editingClient.productDict||{})};
                       Object.assign(dict, cat.items);
