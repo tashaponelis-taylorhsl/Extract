@@ -2018,6 +2018,7 @@ function App() {
         imageContents.push({type:"text",text:`Extract accounting data from this scanned document (file: ${fileName}). May be Thai or English.`});
         onStatus("AI vision OCR (fallback)...");
         return await analyzeImages(imageContents, prompt);
+      }
     }
   }
 
