@@ -1929,10 +1929,15 @@ function App() {
     const productDict = client?.productDict || {};
     console.log("Product dict entries:", Object.keys(productDict).length, Object.keys(productDict).slice(0,3));
     const productDictStr = Object.keys(productDict).length > 0
-      ? "\n\nPRODUCT DICTIONARY — CRITICAL: Always check this list first when translating Thai product names.\n" +
-        "When you see any Thai text that matches or closely resembles an entry below, use the English name provided.\n" +
-        "Even if the handwriting is unclear or garbled, try to match it to the closest entry.\n" +
-        "DO NOT invent or guess product names — if unsure use the closest dictionary match.\n" +
+      ? "\n\nPRODUCT DICTIONARY — THIS IS MANDATORY. You MUST use this list for all product name translations.\n" +
+        "RULES:\n" +
+        "1. Before translating ANY Thai product name, scan this entire dictionary first\n" +
+        "2. Find the closest match even if the OCR text is garbled or partially unreadable\n" +
+        "3. Handwritten Thai OCR is imperfect — e.g. 'ส.มโง' matches 'ส้มโอ' = Pomelo\n" +
+        "4. NEVER use a generic name like 'fruit', 'vegetable', 'item' if a dictionary match exists\n" +
+        "5. Match by the first 2-3 characters — they are usually more reliable than the rest\n" +
+        "6. If you cannot match, describe what you can read rather than inventing a name\n\n" +
+        "DICTIONARY:\n" +
         Object.entries(productDict).map(([thai, eng]) => thai + " = " + eng).join("\n")
       : "";
     const prompt = SYSTEM_PROMPT(coa, businessType, wfRules, client) + productDictStr;
