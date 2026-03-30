@@ -1455,26 +1455,8 @@ function App() {
         previewVatType = vatPreview.vatType;
       } catch(e) { console.warn("VAT preview failed:", e); }
 
-      const approvedLines = await new Promise((resolve) => {
-        lineReviewResolveRef.current = resolve;
-        setLineReviewModal({
-          lines: rawLines.map(l => ({...l})), // clone to allow editing
-          vendor: ex.vendor || "Unknown vendor",
-          total: ex.totalAmount || 0,
-          vatAmount: ex.vatAmount || 0,
-          vatType: previewVatType,
-          docNumber: ex.documentNumber || "",
-          voucherNumber: ex.voucherNumber || "",
-        });
-      });
-
-      if (!approvedLines) {
-        setPostStatus(s=>({...s,[ri]:{status:"error", error:"Posting cancelled — lines not approved"}}));
-        return;
-      }
-
-      // Use approved (possibly edited) lines
-      const finalRawLines = approvedLines;
+      // Use lines directly from results screen (already reviewed and edited by user)
+      const finalRawLines = rawLines;
 
       // Resolve GL accounts with learning
       const resolvedLines = [];
