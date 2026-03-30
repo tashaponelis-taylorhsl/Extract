@@ -269,6 +269,7 @@ function App() {
   const [usersData, setUsersData] = useState([]);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState("");
+  const [kvHistory, setKvHistory] = useState({}); // clientId -> processed files from KV
   const [newProductThai, setNewProductThai] = useState("");
   const [historyData, setHistoryData] = useState(null); // null = not loaded yet
   const [newProductEnglish, setNewProductEnglish] = useState("");
@@ -1948,7 +1949,8 @@ function App() {
     } else {
       // Step 1: Use Google Vision API for accurate Thai OCR on each page
       let combinedText = "";
-      let visionFailed = false;
+      const claudeVisionPages = [];
+      
       for(let i=1;i<=numPages;i++){
         onStatus(`Reading page ${i} of ${numPages}...`);
         const page=await pdf.getPage(i);
@@ -1966,30 +1968,44 @@ function App() {
             body: JSON.stringify({ image: b64 })
           });
           const visionData = await visionRes.json();
-          if (visionData.text && visionData.text.trim()) {
-            combinedText += `
-
---- PAGE ${i} OF ${numPages} (${pageNote}) ---
-${visionData.text}`;
-            console.log(`Page ${i} Google Vision OCR success: ${visionData.text.slice(0,80)}...`);
+          const pageText = (visionData.text || "").trim();
+          
+          if (pageText.length < 100) {
+            // Too little text — likely handwritten, send to Claude Vision
+            console.warn(`Page ${i} Google Vision only got ${pageText.length} chars — using Claude Vision fallback`);
+            claudeVisionPages.push({ i, b64, pageNote, partialText: pageText });
           } else {
-            console.warn(`Page ${i} Vision returned no text:`, visionData.error);
-            visionFailed = true;
+            combinedText += `\n\n--- PAGE ${i} OF ${numPages} (${pageNote}) ---\n${pageText}`;
+            console.log(`Page ${i} Google Vision OCR success: ${pageText.slice(0,80)}...`);
           }
         } catch(e) {
           console.warn(`Page ${i} Vision API failed:`, e.message);
-          visionFailed = true;
+          claudeVisionPages.push({ i, b64, pageNote, partialText: "" });
         }
       }
 
+      // If any pages need Claude Vision fallback
+      if (claudeVisionPages.length > 0) {
+        console.log(`${claudeVisionPages.length} page(s) using Claude Vision for handwritten content`);
+        onStatus("Claude Vision reading handwritten pages...");
+        const imageContents = [];
+        if (combinedText.trim()) {
+          imageContents.push({type:"text", text:`Google OCR text from printed pages:\n${combinedText}`});
+        }
+        for (const p of claudeVisionPages) {
+          imageContents.push({type:"text", text:`\n--- PAGE ${p.i} OF ${numPages} (${p.pageNote}) HANDWRITTEN IMAGE ---`});
+          imageContents.push({type:"image", source:{type:"base64", media_type:"image/jpeg", data:p.b64}});
+        }
+        imageContents.push({type:"text", text:`Extract ALL accounting data (file: ${fileName}). For handwritten pages read each line carefully. Use the PRODUCT DICTIONARY provided to translate Thai product names.`});
+        return await analyzeImages(imageContents, prompt);
+      }
+
       if (combinedText.trim()) {
-        // Step 2: Send accurately OCR'd text to Claude for translation + classification
         onStatus("AI analyzing text...");
         console.log("Google Vision combined text:", combinedText.slice(0, 300));
         return await analyzeText(combinedText, fileName, prompt);
       } else {
-        // Fallback to Claude Vision if Google Vision fails
-        console.warn("Google Vision failed — falling back to Claude Vision");
+        console.warn("All pages failed — falling back to full Claude Vision");
         const imageContents=[];
         for(let i=1;i<=numPages;i++){
           onStatus(`Claude OCR page ${i} of ${numPages}...`);
@@ -2002,7 +2018,6 @@ ${visionData.text}`;
         imageContents.push({type:"text",text:`Extract accounting data from this scanned document (file: ${fileName}). May be Thai or English.`});
         onStatus("AI vision OCR (fallback)...");
         return await analyzeImages(imageContents, prompt);
-      }
     }
   }
 
@@ -3201,8 +3216,11 @@ ${text.slice(0,12000)}`}]})});
 
             {activeClient && (()=>{
               const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth()-3);
-              // Use KV-loaded data if available, otherwise fall back to localStorage
-              const processedFiles = historyData || getProcessedFiles(activeClient);
+              // Merge localStorage + KV history so all users' postings are visible
+              const localFiles = getProcessedFiles(activeClient);
+              const processedFiles = historyData 
+                ? Object.assign({}, historyData, localFiles) 
+                : localFiles;
               const historyEntries = Object.entries(processedFiles)
                 .filter(([id, rec]) => new Date(rec.processedAt) > threeMonthsAgo)
                 .sort((a, b) => new Date(b[1].processedAt) - new Date(a[1].processedAt));
