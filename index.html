@@ -272,13 +272,25 @@ function App() {
   const [userLoading, setUserLoading] = useState(false);
   const fileInputRef = useRef();
 
+  // Reset stage to IDLE when all results manually dismissed
+  useEffect(() => {
+    if (stage === STAGES.DONE && results.length === 0) {
+      setStage(STAGES.IDLE);
+    }
+  }, [results]);
+
   // Auto-dismiss posted results after 4 seconds
   useEffect(() => {
     const postedEntries = Object.entries(postStatus).filter(([,ps]) => ps.status === "posted" || ps.status === "already_posted");
     if (postedEntries.length === 0) return;
     const timer = setTimeout(() => {
       const postedKeys = new Set(postedEntries.map(([k]) => k));
-      setResults(prev => prev.filter((_, i) => !postedKeys.has(String(i))));
+      setResults(prev => {
+        const remaining = prev.filter((_, i) => !postedKeys.has(String(i)));
+        // If no results left, reset to idle so user can upload another document
+        if (remaining.length === 0) setStage(STAGES.IDLE);
+        return remaining;
+      });
       setPostStatus(prev => {
         const next = {...prev};
         postedKeys.forEach(k => delete next[k]);
@@ -1118,7 +1130,13 @@ function App() {
                 setPostStatus(s=>({...s,[ri]:{status:"posted", qboId:updateResult.txId, txType:updateResult.txType, updated:true}}));
               }
               // Auto-dismiss after update
-              setTimeout(() => setResults(prev => prev.filter((_,i) => i !== ri)), 4000);
+              setTimeout(() => {
+              setResults(prev => {
+                const remaining = prev.filter((_,i) => i !== ri);
+                if (remaining.length === 0) setStage(STAGES.IDLE);
+                return remaining;
+              });
+            }, 4000);
             } else {
               setPostStatus(s=>({...s,[ri]:{status:"error", error:"Update failed: "+updateResult.error}}));
             }
@@ -1260,7 +1278,11 @@ function App() {
   }
 
   function dismissResult(ri) {
-    setResults(prev => prev.filter((_,i) => i !== ri));
+    setResults(prev => {
+      const remaining = prev.filter((_,i) => i !== ri);
+      if (remaining.length === 0) setStage(STAGES.IDLE);
+      return remaining;
+    });
     setPostStatus(prev => {
       const next = {...prev};
       delete next[ri];
