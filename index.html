@@ -270,6 +270,7 @@ function App() {
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [newUserEmail, setNewUserEmail] = useState("");
   const [newProductThai, setNewProductThai] = useState("");
+  const [historyData, setHistoryData] = useState(null); // null = not loaded yet
   const [newProductEnglish, setNewProductEnglish] = useState("");
   const [userLoading, setUserLoading] = useState(false);
   const fileInputRef = useRef();
@@ -1358,6 +1359,8 @@ function App() {
       postedByEmail: user.email || "",
     };
     localStorage.setItem(`processed_files_${clientId}`, JSON.stringify(processed));
+    // Auto-save to KV so all users see updated history
+    kvSet(`processed:${clientId}`, processed).catch(e => console.warn("KV processed save failed:", e));
   }
 
   function dismissResult(ri) {
@@ -1924,8 +1927,12 @@ function App() {
     const wfRules = buildWorkflowRules(client);
     // Build product dictionary section for prompt
     const productDict = client?.productDict || {};
+    console.log("Product dict entries:", Object.keys(productDict).length, Object.keys(productDict).slice(0,3));
     const productDictStr = Object.keys(productDict).length > 0
-      ? "\n\nPRODUCT DICTIONARY — use this to translate Thai product names accurately:\n" +
+      ? "\n\nPRODUCT DICTIONARY — CRITICAL: Always check this list first when translating Thai product names.\n" +
+        "When you see any Thai text that matches or closely resembles an entry below, use the English name provided.\n" +
+        "Even if the handwriting is unclear or garbled, try to match it to the closest entry.\n" +
+        "DO NOT invent or guess product names — if unsure use the closest dictionary match.\n" +
         Object.entries(productDict).map(([thai, eng]) => thai + " = " + eng).join("\n")
       : "";
     const prompt = SYSTEM_PROMPT(coa, businessType, wfRules, client) + productDictStr;
@@ -3166,6 +3173,18 @@ ${text.slice(0,12000)}`}]})});
                 <div style={{fontSize:11,color:"#3b82f6",letterSpacing:"0.15em",marginBottom:4}}>DOCUMENT HISTORY</div>
                 <div style={{fontSize:20,fontWeight:"bold",color:"#f1f5f9"}}>{currentClient?.name||"No client selected"} — Last 3 Months</div>
               </div>
+              {activeClient && (
+                <button className="btn" style={{...btnSecondary,fontSize:11}} onClick={async()=>{
+                  setHistoryData(null);
+                  const kvProcessed = await kvGet(`processed:${activeClient}`);
+                  if (kvProcessed) {
+                    localStorage.setItem(`processed_files_${activeClient}`, JSON.stringify(kvProcessed));
+                    setHistoryData(kvProcessed);
+                  } else {
+                    setHistoryData(getProcessedFiles(activeClient));
+                  }
+                }}>🔄 Refresh History</button>
+              )}
             </div>
 
             {!activeClient && (
@@ -3177,13 +3196,16 @@ ${text.slice(0,12000)}`}]})});
 
             {activeClient && (()=>{
               const threeMonthsAgo = new Date(); threeMonthsAgo.setMonth(threeMonthsAgo.getMonth()-3);
-              const historyData = Object.entries(getProcessedFiles(activeClient))
+              // Use KV-loaded data if available, otherwise fall back to localStorage
+              const processedFiles = historyData || getProcessedFiles(activeClient);
+              const historyEntries = Object.entries(processedFiles)
                 .filter(([id, rec]) => new Date(rec.processedAt) > threeMonthsAgo)
                 .sort((a, b) => new Date(b[1].processedAt) - new Date(a[1].processedAt));
+              const historyData2 = historyEntries;
               const qboEnv = currentClient?.qboEnv || "sandbox";
               const qboBase = qboEnv === "production" ? "https://app.qbo.intuit.com/app" : "https://app.sandbox.qbo.intuit.com/app";
 
-              if (historyData.length === 0) return (
+              if (historyData2.length === 0) return (
                 <div style={{...card,padding:40,textAlign:"center",color:"#475569"}}>
                   <div style={{fontSize:32,marginBottom:12}}>📭</div>
                   <div>No documents processed in the last 3 months</div>
@@ -3201,7 +3223,7 @@ ${text.slice(0,12000)}`}]})});
                     <span style={{flex:1}}>POSTED BY</span>
                     <span style={{width:80}}>QBO</span>
                   </div>
-                  {historyData.map(([fileId, rec])=>(
+                  {historyData2.map(([fileId, rec])=>(
                     <div key={fileId} className="rh" style={{padding:"12px 18px",borderBottom:"1px solid rgba(22,32,50,0.6)",display:"flex",alignItems:"center",gap:16,fontSize:12}}>
                       <div style={{flex:2,color:"#94a3b8",fontSize:11,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={rec.fileName}>
                         📄 {rec.fileName}
@@ -3236,8 +3258,8 @@ ${text.slice(0,12000)}`}]})});
                     </div>
                   ))}
                   <div style={{padding:"10px 18px",borderTop:"1px solid #162032",display:"flex",justifyContent:"space-between",fontSize:11,color:"#475569"}}>
-                    <span>{historyData.length} documents</span>
-                    <span>Total: THB {historyData.reduce((s,[,r])=>s+(r.amount||0),0).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
+                    <span>{historyData2.length} documents</span>
+                    <span>Total: THB {historyData2.reduce((s,[,r])=>s+(r.amount||0),0).toLocaleString(undefined,{minimumFractionDigits:2})}</span>
                   </div>
                 </div>
               );
