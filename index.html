@@ -537,35 +537,49 @@ function App() {
   // Load all data from KV on startup (if localStorage is empty)
   async function loadFromKV() {
     try {
-      // Check if localStorage has clients — if not load from KV
-      const localClients = localStorage.getItem("extract_clients");
-      if (!localClients || JSON.parse(localClients).length === 0) {
-        console.log("Loading clients from KV...");
-        const kvClients = await kvGet(`clients:${KV_USER}`);
-        if (kvClients && kvClients.length > 0) {
-          const safeClients = Array.isArray(kvClients) ? kvClients : [];
-          setClients(safeClients);
-          localStorage.setItem("extract_clients", JSON.stringify(safeClients));
-          console.log(`Restored ${kvClients.length} clients from KV`);
-          // Also restore GL memory for each client
-          for (const client of kvClients) {
-            const glMemory = await kvGet(`gl_memory:${client.id}`);
-            if (glMemory) {
-              localStorage.setItem(`gl_memory_${client.id}`, JSON.stringify(glMemory));
-              console.log(`Restored GL memory for ${client.name}`);
-            }
-            const periods = await kvGet(`periods:${client.id}`);
-            if (periods) {
-              localStorage.setItem(`closed_periods_${client.id}`, JSON.stringify(periods));
-            }
-            const processed = await kvGet(`processed:${client.id}`);
-            if (processed) {
-              localStorage.setItem(`processed_files_${client.id}`, JSON.stringify(processed));
-            }
+      // Always load clients from KV on startup so all users get latest tokens and settings
+      console.log("Loading clients from KV...");
+      const kvClients = await kvGet(`clients:${KV_USER}`);
+      if (kvClients && kvClients.length > 0) {
+        const safeClients = Array.isArray(kvClients) ? kvClients : [];
+        // Merge KV clients with localStorage — KV wins for tokens, localStorage wins for COA
+        const localClients = JSON.parse(localStorage.getItem("extract_clients")||"[]");
+        const mergedClients = safeClients.map(kvC => {
+          const localC = localClients.find(l => l.id === kvC.id);
+          // Keep COA from localStorage if available (too large to store in KV)
+          return localC?.chartOfAccounts?.length > 0 
+            ? {...kvC, chartOfAccounts: localC.chartOfAccounts}
+            : kvC;
+        });
+        setClients(mergedClients);
+        localStorage.setItem("extract_clients", JSON.stringify(mergedClients));
+        console.log(`Synced ${kvClients.length} clients from KV`);
+        // Restore GL memory and periods for each client
+        for (const client of safeClients) {
+          const glMemory = await kvGet(`gl_memory:${client.id}`);
+          if (glMemory) {
+            localStorage.setItem(`gl_memory_${client.id}`, JSON.stringify(glMemory));
           }
-          alert("✅ Data restored from cloud backup!");
+          const periods = await kvGet(`periods:${client.id}`);
+          if (periods) {
+            localStorage.setItem(`closed_periods_${client.id}`, JSON.stringify(periods));
+          }
+          const processed = await kvGet(`processed:${client.id}`);
+          if (processed) {
+            localStorage.setItem(`processed_files_${client.id}`, JSON.stringify(processed));
+          }
         }
       }
+      // Always load users from KV on startup — no manual button needed
+      try {
+        const kvUsers = await kvGet(`users:${TRUSTED_DOMAIN}`);
+        if (kvUsers && kvUsers.length > 0) {
+          setUsersData(kvUsers);
+          setUsersLoaded(true);
+          console.log(`Loaded ${kvUsers.length} users from KV`);
+        }
+      } catch(e) { console.warn("KV users load failed:", e); }
+
     } catch(e) { console.warn("KV load failed:", e); }
   }
 
@@ -1397,7 +1411,8 @@ function App() {
 
   function markFileProcessed(clientId, fileId, fileName, qboId, txType, extraData={}) {
     const processed = getProcessedFiles(clientId);
-    const user = JSON.parse(localStorage.getItem("extract_user")||"{}");
+    // Use currentUser from React state, fall back to localStorage
+    const user = currentUser || JSON.parse(localStorage.getItem("extract_user")||"{}");
     processed[fileId] = { 
       fileName, qboId, txType, 
       processedAt: new Date().toISOString(),
