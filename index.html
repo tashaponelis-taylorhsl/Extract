@@ -1,4 +1,4 @@
-<!DOCTYPE html><!-- Extract-Dev v2.1 -->
+<!DOCTYPE html><!-- Extract Production v2.1 -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -30,6 +30,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const PROXY = "https://thai-ledger-proxy-fwce.vercel.app";
+const ENV = "production"; // DO NOT CHANGE — use "development" in Dev file only
 const APP_URL = "https://tashaponelis-taylorhsl.github.io/Extract/";
 const GRAPH_SCOPES = ["Files.Read.All","Sites.Read.All","offline_access","openid","profile"];
 const QBO_SCOPES = "com.intuit.quickbooks.accounting openid profile email phone address";
@@ -118,7 +119,7 @@ Return ONLY this JSON (no markdown):
   "transactionType": "Bill|Expense|Purchase Order",
   "vendor": "vendor name in English",
   "vendorVatNumber": "Thai VAT registration number if present",
-  "documentDate": "MM/DD/YYYY",
+  "documentDate": "MM/DD/YYYY — CRITICAL: use the SUPPLIER INVOICE DATE or RECEIPT DATE only. This is the date printed on the supplier invoice/receipt itself. Do NOT use the petty cash voucher date, payment date, processing date, or today's date. If the supplier invoice shows 28/03/2026 use 03/28/2026. The invoice date is usually near the top of the supplier invoice next to วันที่, Date, or เลขที่",
   "dueDate": "MM/DD/YYYY or null",
   "documentNumber": "invoice/document number or supplier invoice number — use the actual number printed on the document. If no document number is found leave as empty string \"\", NEVER invent or repeat zeros",
   "taxInvoiceNumber": "tax invoice number — search carefully for these labels anywhere on the document: เลขที่ใบเสร็จ, เลขที่ใบกำกับภาษี, Receipt No., Tax Invoice No., Inv No., เลขที่. For Go Wholesale/Makro/retail receipts the number is printed near the top right corner next to Receipt No. or เลขที่ใบเสร็จ — it often starts with PK, IV, or similar prefix followed by digits. Read it character by character carefully. If genuinely not found leave as empty string \"\"",
@@ -1086,7 +1087,7 @@ function App() {
     const journalDesc = `Input VAT 7% ✅ | ${[voucherPart, vendorPart].filter(Boolean).join(" | ")} ${taxInvPart}`.trim();
 
     const journalBody = {
-      TxnDate: docDate,
+      TxnDate: toQBODate(docDate),
       PrivateNote: `VAT transfer Pending → Confirmed | ${[voucherPart, vendorPart].filter(Boolean).join(" | ")} | Tax Invoice: ${reference}`,
       Line: [
         {
@@ -1163,6 +1164,17 @@ function App() {
   }
 
   // ── Period Management ───────────────────────────────────────────────
+  // Convert MM/DD/YYYY to YYYY-MM-DD for QBO API
+  function toQBODate(dateStr) {
+    if (!dateStr) return null;
+    // Already in YYYY-MM-DD format
+    if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) return dateStr;
+    // Convert from MM/DD/YYYY
+    const m = dateStr.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[1]}-${m[2]}`;
+    return dateStr;
+  }
+
   function getClosedPeriods(clientId) {
     try { return JSON.parse(localStorage.getItem(`closed_periods_${clientId}`) || "{}"); } catch { return {}; }
   }
@@ -1692,8 +1704,8 @@ function App() {
           const { vatLines } = buildVATLines({...ex, vatAmount: inv.vatAmount, totalAmount: inv.totalAmount}, client, resolvedInvLines);
           const billBody = {
             VendorRef: vendorRef,
-            TxnDate: ex.documentDate,
-            DueDate: ex.documentDate,
+            TxnDate: toQBODate(ex.documentDate),
+            DueDate: toQBODate(ex.documentDate),
             DocNumber: (inv.documentNumber||"").slice(0,21),
             CustomField: buildCustomFields(client, inv.taxInvoiceNumber||null),
             PrivateNote: `Tax Invoice: ${inv.taxInvoiceNumber||inv.documentNumber} | Voucher: ${ex.voucherNumber} | Bill ${invIdx+1} of ${ex.invoices.length} | Source: ${result.file}`,
@@ -1724,7 +1736,7 @@ function App() {
             BankAccountRef: { value: (client.chartOfAccounts||[]).find(a=>a.name===(client.pettyCashAccount||"Petty cash - office"))?.id, name: client.pettyCashAccount||"Petty cash - office" }
           },
           TotalAmt: ex.totalAmount,
-          TxnDate: ex.documentDate,
+          TxnDate: toQBODate(ex.documentDate),
           DocNumber: (ex.voucherNumber||"").slice(0,21),
           PrivateNote: `Petty Cash payment | Voucher: ${ex.voucherNumber} | Bills: ${billIds.join(', ')} | Source: ${result.file}`,
           Line: billIds.map((billId, i) => ({
@@ -1816,8 +1828,8 @@ function App() {
         ];
         const billBody = {
           VendorRef: vendorRef,
-          TxnDate: ex.documentDate,
-          DueDate: ex.dueDate || ex.documentDate,
+          TxnDate: toQBODate(ex.documentDate),
+          DueDate: toQBODate(ex.dueDate || ex.documentDate),
           DocNumber: (refNo || ex.documentNumber||"").slice(0, 21),
           CustomField: buildCustomFields(client, ex.taxInvoiceNumber||null),
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | VAT: ${vatType==="confirmed"?"Confirmed ✅":vatType==="pending"?"Pending ⏳":"Not claimed ❌"} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
@@ -1855,7 +1867,7 @@ function App() {
           AccountRef: { value: pettyCashAcc.id, name: pettyCashAcc.name },
           // EntityRef is optional for petty cash — only include if vendor was matched
           ...(vendorRef ? { EntityRef: vendorRef } : {}),
-          TxnDate: ex.documentDate,
+          TxnDate: toQBODate(ex.documentDate),
           DocNumber: (refNo||"").slice(0, 21),
           CustomField: buildCustomFields(client, ex.taxInvoiceNumber||null),
           PrivateNote: `Tax Invoice: ${ex.taxInvoiceNumber||ex.documentNumber} | Voucher: ${ex.voucherNumber||extractVoucherFromFilename(result.file)||""} | WHT ${ex.whtRate||0}%: ${ex.whtAmount||0} | Source: ${result.file}${ex.originalDocumentDate ? " | Original doc date: "+ex.originalDocumentDate+" (late posting)" : ""}`,
@@ -1971,7 +1983,7 @@ function App() {
         BankAccountRef: { value: pettyCashAcc.id, name: pettyCashAcc.name }
       },
       TotalAmt: totalAmount,
-      TxnDate: paymentDate,
+      TxnDate: toQBODate(paymentDate),
       DocNumber: voucherNumber,
       PrivateNote: `Petty Cash payment | Voucher: ${voucherNumber} | Bills: ${billIds.join(', ')}${variance > 0 ? ` | Rounding variance: ฿${variance.toFixed(2)}` : ''}`,
       Line: paymentLines
@@ -2461,7 +2473,7 @@ function App() {
       <div style={{borderBottom:"1px solid #162032",padding:"14px 28px",display:"flex",alignItems:"center",gap:14,background:"linear-gradient(90deg,#070d1a,#0d1b35)",position:"sticky",top:0,zIndex:100}}>
         <div style={{width:34,height:34,borderRadius:8,background:"linear-gradient(135deg,#3b82f6,#06b6d4)",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:"bold",color:"#fff",fontSize:13,cursor:"pointer"}} onClick={()=>{setView(VIEWS.HOME);setStage(STAGES.IDLE);setResults([]);}}>EX</div>
         <div style={{cursor:"pointer"}} onClick={()=>{setView(VIEWS.HOME);setStage(STAGES.IDLE);setResults([]);}}>
-          <div style={{fontSize:15,fontWeight:"bold",letterSpacing:"0.06em"}}>EXTRACT</div>
+          <div style={{fontSize:15,fontWeight:"bold",letterSpacing:"0.06em"}}>EXTRACT {ENV==="development" && <span style={{fontSize:9,padding:"2px 6px",background:"#f59e0b",color:"#000",borderRadius:3,marginLeft:6,fontWeight:"bold"}}>DEV</span>}</div>
           <div style={{fontSize:10,color:"#475569",letterSpacing:"0.1em"}}>AI ACCOUNTING · EN/TH → QUICKBOOKS</div>
         </div>
 
