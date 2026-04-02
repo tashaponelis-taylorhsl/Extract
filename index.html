@@ -263,6 +263,7 @@ function App() {
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
   const [currentUser, setCurrentUser] = useState(null);
   // Check if we have a saved session or OAuth callback in progress
+  try{localStorage.setItem("extract_settings", JSON.stringify({msClientId:"7536933f-ea05-42fc-af0a-cc80b04d433f",msTenantId:"d8c67863-dba1-4e00-b966-606bf3a5d38d"}));}catch(e){}
   const hasOAuthCallback = new URLSearchParams(window.location.search).has("code");
   const hasSavedUser = !!localStorage.getItem("extract_user");
   const [isAuthenticated, setIsAuthenticated] = useState(hasSavedUser || hasOAuthCallback);
