@@ -29,8 +29,8 @@ const { useState, useRef, useCallback, useEffect } = React;
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const PROXY = "https://thai-ledger-proxy-dev.vercel.app";
-const APP_URL = "https://tashaponelis-taylorhsl.github.io/Extract-Dev/";
+const PROXY = "https://thai-ledger-proxy-fwce.vercel.app";
+const APP_URL = "https://tashaponelis-taylorhsl.github.io/Extract/";
 const GRAPH_SCOPES = ["Files.Read.All","Sites.Read.All","offline_access","openid","profile"];
 const QBO_SCOPES = "com.intuit.quickbooks.accounting openid profile email phone address";
 const QBO_SANDBOX_BASE = "https://sandbox-quickbooks.api.intuit.com/v3/company";
@@ -554,7 +554,7 @@ function App() {
         setClients(mergedClients);
         localStorage.setItem("extract_clients", JSON.stringify(mergedClients));
         console.log(`Synced ${kvClients.length} clients from KV`);
-        // Restore GL memory and periods for each client
+        // Restore GL memory, periods, COA for each client
         for (const client of safeClients) {
           const glMemory = await kvGet(`gl_memory:${client.id}`);
           if (glMemory) {
@@ -567,6 +567,15 @@ function App() {
           const processed = await kvGet(`processed:${client.id}`);
           if (processed) {
             localStorage.setItem(`processed_files_${client.id}`, JSON.stringify(processed));
+          }
+          // Restore COA for bookkeepers who may not have it in localStorage
+          const localC = localClients.find(l => l.id === client.id);
+          if (!localC?.chartOfAccounts?.length) {
+            const coa = await kvGet(`coa:${client.id}`);
+            if (coa && coa.length > 0) {
+              setClients(prev => prev.map(c => c.id === client.id ? {...c, chartOfAccounts: coa} : c));
+              console.log(`Restored ${coa.length} GL accounts for ${client.name}`);
+            }
           }
         }
       }
