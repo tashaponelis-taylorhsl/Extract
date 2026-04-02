@@ -278,6 +278,7 @@ function App() {
   const [postStatus, setPostStatus] = useState({}); // ri -> {status, qboId, error}
   const [currentUser, setCurrentUser] = useState(null);
   // Check if we have a saved session or OAuth callback in progress
+<<<<<<< HEAD
   // Fallback MS credentials — loaded if localStorage and KV are both empty
   // This prevents lockout if settings are lost
   const MS_CLIENT_ID_FALLBACK = "7536933f-ea05-42fc-af0a-cc80b04d433f";
@@ -291,6 +292,9 @@ function App() {
     }
   } catch(e) {}
 
+=======
+  try{localStorage.setItem("extract_settings", JSON.stringify({msClientId:"7536933f-ea05-42fc-af0a-cc80b04d433f",msTenantId:"d8c67863-dba1-4e00-b966-606bf3a5d38d"}));}catch(e){}
+>>>>>>> e5c071562841b1cea4edf7766579bb5540ab4cdf
   const hasOAuthCallback = new URLSearchParams(window.location.search).has("code");
   const hasSavedUser = !!localStorage.getItem("extract_user");
   const [isAuthenticated, setIsAuthenticated] = useState(hasSavedUser || hasOAuthCallback);
