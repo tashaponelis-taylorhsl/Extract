@@ -1432,8 +1432,15 @@ function App() {
 
   function markFileProcessed(clientId, fileId, fileName, qboId, txType, extraData={}) {
     const processed = getProcessedFiles(clientId);
-    // Use currentUser from React state, fall back to localStorage
-    const user = currentUser || JSON.parse(localStorage.getItem("extract_user")||"{}");
+    // Get current user — try React state first, then localStorage, then KV users list
+    let user = currentUser;
+    if (!user || !user.email) {
+      try { user = JSON.parse(localStorage.getItem("extract_user")||"{}"); } catch(e) {}
+    }
+    // Final fallback — try to find user in usersData by matching any available info
+    if (!user || !user.email) {
+      user = usersData.find(u => u.role === "admin") || { name: "Unknown", email: "" };
+    }
     processed[fileId] = { 
       fileName, qboId, txType, 
       processedAt: new Date().toISOString(),
