@@ -1597,6 +1597,12 @@ function App() {
     setPostStatus(s=>({...s,[ri]:{status:"posting"}}));
     try {
       const ex = result.extracted;
+      console.log("PostToQBO client:", {
+        name: client.name,
+        taxInvoiceFieldId: client.taxInvoiceFieldId,
+        customFieldsCount: Object.keys(client.customFields||{}).length,
+        qboConnected: client.qboConnected
+      });
 
       // Guard against null extracted data
       if (!ex) {
@@ -3409,8 +3415,16 @@ function App() {
                     <div key={ri} style={{...card,marginBottom:20}}>
                       {/* Doc header */}
                       <div style={{padding:"14px 18px",background:"rgba(22,32,50,0.4)",borderBottom:"1px solid #162032",display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                        {/* Transaction type badge */}
-                        {ex?.transactionType && (
+                        {/* Transaction type badge — clickable to toggle */}
+                        {ex?.transactionType && !ps && (
+                          <button onClick={()=>{
+                            const newType = ex.transactionType==="Bill" ? "Expense" : "Bill";
+                            setResults(prev => prev.map((r,i) => i===ri ? {...r, extracted:{...r.extracted, transactionType:newType}} : r));
+                          }} style={{padding:"3px 10px",background:ex.transactionType==="Bill"?"rgba(59,130,246,0.15)":"rgba(16,185,129,0.15)",border:`1px solid ${ex.transactionType==="Bill"?"rgba(59,130,246,0.3)":"rgba(16,185,129,0.3)"}`,borderRadius:4,fontSize:10,color:ex.transactionType==="Bill"?"#3b82f6":"#10b981",fontWeight:"bold",cursor:"pointer",title:"Click to toggle Bill/Expense"}}>
+                            {ex.transactionType==="Bill"?"📋 BILL ✎":"💵 EXPENSE ✎"}
+                          </button>
+                        )}
+                        {ex?.transactionType && ps && (
                           <span style={{padding:"3px 10px",background:ex.transactionType==="Bill"?"rgba(59,130,246,0.15)":"rgba(16,185,129,0.15)",border:`1px solid ${ex.transactionType==="Bill"?"rgba(59,130,246,0.3)":"rgba(16,185,129,0.3)"}`,borderRadius:4,fontSize:10,color:ex.transactionType==="Bill"?"#3b82f6":"#10b981",fontWeight:"bold"}}>
                             {ex.transactionType==="Bill"?"📋 BILL":"💵 EXPENSE"}
                           </span>
