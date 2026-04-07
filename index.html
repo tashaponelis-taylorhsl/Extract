@@ -1701,7 +1701,10 @@ function App() {
         // vendorRef = null means no vendor on the expense — perfectly valid for petty cash
       }
 
-      const rawLines = (ex.lines||[{description: ex.transactions?.[0]?.description||"Service", amount: ex.totalAmount||0, accountName: ex.transactions?.[0]?.category||""}]);
+      // Apply VAT correction to rawLines BEFORE GL resolution
+      const { ex: vatCorrectedEx, autoFixed: vatAutoFixed } = validateAndFixVAT(ex);
+      if (vatAutoFixed) console.log("VAT auto-corrected during posting for:", result.file);
+      const rawLines = (vatCorrectedEx.lines||[{description: ex.transactions?.[0]?.description||"Service", amount: ex.totalAmount||0, accountName: ex.transactions?.[0]?.category||""}]);
 
       // Show line review modal before posting — let user verify groupings
       let previewVatType = "none";
@@ -1857,18 +1860,16 @@ function App() {
         }
       }
 
-      // Validate and auto-fix VAT calculation
-      const { ex: fixedEx, warning: vatWarning, autoFixed } = validateAndFixVAT({...ex, lines: resolvedLines.map(l => ({...l}))});
-      if (autoFixed) {
-        console.log("VAT auto-corrected — lines were VAT-inclusive");
-      }
-      if (vatWarning) {
-        setPostStatus(s=>({...s,[ri]:{status:"error", error:"⚠️ VAT mismatch: " + vatWarning}}));
-        return;
-      }
-      // Use corrected lines if auto-fixed
-      if (autoFixed) {
-        resolvedLines = fixedEx.lines.map((l, i) => ({...resolvedLines[i], amount: l.amount}));
+      // Validate final amounts match document total
+      const lineTotal = resolvedLines.reduce((s,l) => s+Math.abs(l.amount||0), 0);
+      const expectedTotal = (ex.totalAmount||0) - (ex.vatAmount||0);
+      const finalVariance = Math.abs(lineTotal - expectedTotal);
+      if (finalVariance > 1.0) {
+        const { warning: vatWarning } = validateAndFixVAT({...vatCorrectedEx, lines: resolvedLines});
+        if (vatWarning) {
+          setPostStatus(s=>({...s,[ri]:{status:"error", error:"⚠️ VAT mismatch: " + vatWarning}}));
+          return;
+        }
       }
 
       // Build VAT lines
