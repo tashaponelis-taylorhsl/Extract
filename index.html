@@ -3454,7 +3454,7 @@ function App() {
                         {/* Post status */}
                         {ps?.status==="posting"&&<span style={{fontSize:11,color:"#f59e0b"}}>⏳ Posting...</span>}
                         {ps?.status==="already_posted"&&<span style={{fontSize:11,color:"#f59e0b"}}>⚠️ Already posted on {new Date(ps.processedAt).toLocaleDateString()} ({ps.txType} #{ps.qboId}) — dismissing...</span>}
-                        {ps?.status==="posted"&&!ps?.updated&&<span style={{fontSize:11,color:"#10b981"}}>✅ Posted to QBO ({ps.txType} #{ps.qboId}){ps.taxInvField ? ` · Tax Inv: ${ps.taxInvField}` : " · ⚠️ No tax inv field"}</span>}
+                        {ps?.status==="posted"&&!ps?.updated&&<span style={{fontSize:11,color:"#10b981"}}>✅ Posted to QBO ({ps.txType} #{ps.qboId}){ps.taxInvField ? ` · Tax Inv: ${ps.taxInvField}` : ""}</span>}
                         {ps?.status==="posted"&&ps?.updated&&!ps?.journalId&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated #{ps.qboId} — Tax Invoice & PDF added</span>}
                         {ps?.status==="posted"&&ps?.updated&&ps?.journalId&&<span style={{fontSize:11,color:"#06b6d4"}}>🔄 Updated #{ps.qboId} — VAT moved to Confirmed (JE #{ps.journalId})</span>}
                         {ps?.status==="posted"&&ps?.updated&&ps?.journalError&&<span style={{fontSize:11,color:"#f59e0b"}}>🔄 Updated #{ps.qboId} — VAT journal failed: {ps.journalError}</span>}
